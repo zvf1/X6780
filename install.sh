@@ -79,15 +79,46 @@ else
 fi
 
 info "Preparing kernel headers (generates autoconf.h — needed on Arch)..."
-# Arch linux-headers ships without running make prepare, so generated/autoconf.h
-# does not exist yet. This is required before any out-of-tree module build.
-# Avoid `make prepare` — it runs syncconfig over the full Kconfig tree and fails
-# on x86 headers when the config references ARM crypto Kconfig files (Arch quirk).
-# scripts_basic + modules_prepare generate exactly what out-of-tree modules need.
+# Arch linux-headers does not ship a pre-generated autoconf.h, and `make prepare`
+# fails because the headers package omits arch-specific Kconfig files referenced
+# by crypto/Kconfig (arm, arm64, sparc, etc.). We work around this by:
+#   1. Stubbing all missing arch Kconfig files so syncconfig can parse the tree
+#   2. Seeding autoconf.h and auto.conf directly from the shipped .config
 KBUILD="/lib/modules/$(uname -r)/build"
-if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]]; then
-    sudo make -C "$KBUILD" scripts_basic
-    sudo make -C "$KBUILD" modules_prepare
+if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]] || [[ ! -s "$KBUILD/include/generated/autoconf.h" ]]; then
+    info "Stubbing missing arch Kconfig files..."
+    for arch in arm arm64 loongarch mips powerpc riscv s390 sparc x86; do
+        sudo mkdir -p "$KBUILD/arch/$arch/crypto"
+        sudo touch "$KBUILD/arch/$arch/crypto/Kconfig"
+    done
+
+    info "Seeding autoconf.h and auto.conf from .config..."
+    sudo mkdir -p "$KBUILD/include/generated" "$KBUILD/include/config"
+
+    # Build autoconf.h from .config — convert CONFIG_FOO=y/m → #define CONFIG_FOO 1
+    # and CONFIG_FOO=<val> → #define CONFIG_FOO <val>; skip CONFIG_CC_VERSION_TEXT
+    # (its embedded quotes break make's shell comparisons).
+    sudo bash -c '
+        KBUILD="'"$KBUILD"'"
+        grep "^CONFIG_" "$KBUILD/.config" | grep -v "^CONFIG_CC_VERSION_TEXT" | \
+        while IFS="=" read key val; do
+            if [ "$val" = "y" ] || [ "$val" = "m" ]; then
+                echo "#define $key 1"
+            elif [ -n "$val" ]; then
+                echo "#define $key $val"
+            fi
+        done > /tmp/autoconf.h
+        cp /tmp/autoconf.h "$KBUILD/include/generated/autoconf.h"
+    '
+
+    # auto.conf: full .config content minus CC_VERSION_TEXT (same reason)
+    sudo bash -c '
+        KBUILD="'"$KBUILD"'"
+        grep "^CONFIG_" "$KBUILD/.config" | grep -v "^CONFIG_CC_VERSION_TEXT" \
+            > "$KBUILD/include/config/auto.conf"
+    '
+    sudo touch "$KBUILD/include/config/auto.conf.cmd"
+    ok "autoconf.h seeded successfully."
 else
     ok "autoconf.h already exists, skipping prepare."
 fi
@@ -98,15 +129,21 @@ info "Building tuxedo-drivers (this takes a moment)..."
 sudo sh -c "cd '$DRIVERS_SRC' && make -j$(nproc)"
 
 info "Installing kernel modules..."
-sudo sh -c "cd '$DRIVERS_SRC' && make install"
+# Use modules_install, not install — the tuxedo-drivers `make install` target
+# also runs `cp -r usr /` which fails when that directory doesn't exist in the repo.
+sudo sh -c "cd '$DRIVERS_SRC' && make modules_install"
 sudo depmod -a
 ok "tuxedo-drivers built and installed."
 
-# ---- 4. Modprobe tuxedo_keyboard now ----
-if ! lsmod | grep -q tuxedo_keyboard; then
-    info "Loading tuxedo_keyboard module..."
-    sudo modprobe tuxedo_keyboard || warn "modprobe tuxedo_keyboard failed — may need a reboot."
-fi
+# ---- 4. Modprobe tuxedo modules now ----
+# clevo_wmi is required to expose white:kbd_backlight on the X6780.
+# tuxedo_keyboard pulls in clevo_acpi and tuxedo_io automatically.
+for mod in tuxedo_keyboard clevo_wmi; do
+    if ! lsmod | grep -q "^$mod"; then
+        info "Loading $mod module..."
+        sudo modprobe "$mod" || warn "modprobe $mod failed — may need a reboot."
+    fi
+done
 
 # Confirm the LED device exists
 if [[ -d /sys/class/leds/white:kbd_backlight ]]; then
@@ -126,13 +163,30 @@ sudo tee "$REBUILD_BIN" > /dev/null << 'EOF'
 set -e
 echo "[tuxedo-drivers] Rebuilding for kernel $(uname -r)..."
 KBUILD="/lib/modules/$(uname -r)/build"
-if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]]; then
-    make -C "$KBUILD" scripts_basic
-    make -C "$KBUILD" modules_prepare
+
+if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]] || [[ ! -s "$KBUILD/include/generated/autoconf.h" ]]; then
+    echo "[tuxedo-drivers] Seeding autoconf.h from .config..."
+    for arch in arm arm64 loongarch mips powerpc riscv s390 sparc x86; do
+        mkdir -p "$KBUILD/arch/$arch/crypto"
+        touch "$KBUILD/arch/$arch/crypto/Kconfig"
+    done
+    mkdir -p "$KBUILD/include/generated" "$KBUILD/include/config"
+    grep "^CONFIG_" "$KBUILD/.config" | grep -v "^CONFIG_CC_VERSION_TEXT" | \
+    while IFS="=" read key val; do
+        if [ "$val" = "y" ] || [ "$val" = "m" ]; then
+            echo "#define $key 1"
+        elif [ -n "$val" ]; then
+            echo "#define $key $val"
+        fi
+    done > "$KBUILD/include/generated/autoconf.h"
+    grep "^CONFIG_" "$KBUILD/.config" | grep -v "^CONFIG_CC_VERSION_TEXT" \
+        > "$KBUILD/include/config/auto.conf"
+    touch "$KBUILD/include/config/auto.conf.cmd"
 fi
+
 cd /usr/src/tuxedo-drivers && make clean
 make -j$(nproc)
-make install
+make modules_install
 depmod -a
 echo "[tuxedo-drivers] Done."
 EOF
