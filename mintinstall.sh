@@ -17,8 +17,7 @@ INSTALL_DIR="/opt/clevo-fancontrol"
 SCRIPT="$INSTALL_DIR/clevo_fancontrol.py"
 SUDOERS_FILE="/etc/sudoers.d/clevo-fancontrol"
 DRIVERS_SRC="/usr/src/tuxedo-drivers"
-DKMS_NAME="tuxedo-drivers"
-DKMS_VERSION="1.0"   # bump if you re-pull a newer drivers tree
+REBUILD_HOOK="/etc/kernel/postinst.d/zz-tuxedo-drivers-rebuild"
 
 # ---- Detect the real user ----
 REAL_USER="${SUDO_USER:-$USER}"
@@ -45,7 +44,7 @@ info "Updating apt package lists..."
 sudo apt-get update -qq
 
 info "Installing apt dependencies..."
-DEPS=(git build-essential dkms "linux-headers-$(uname -r)" python3 python3-pip python3-tk python3-pil)
+DEPS=(git build-essential "linux-headers-$(uname -r)" python3 python3-pip python3-tk python3-pil)
 sudo apt-get install -y "${DEPS[@]}"
 
 # clevo_fancontrol.py is invoked by `sudo` directly via its own
@@ -69,7 +68,12 @@ else
     ok "Pillow already importable system-wide."
 fi
 
-# ---- 2. Clone tuxedo-drivers and register with DKMS ----
+# ---- 2. Clone and build tuxedo-drivers ----
+# NOTE: this fork ships no dkms.conf — it builds via a plain Kbuild/Makefile
+# against the running kernel's build dir (M=$(PWD) modules), same as on
+# Arch. Unlike Arch, Ubuntu/Mint's linux-headers package ships a working
+# pre-generated autoconf.h, so none of the Kconfig-stubbing workaround from
+# eosinstall.sh is needed here.
 info "Cloning tuxedo-drivers from $DRIVERS_REPO ..."
 if [[ -d "$DRIVERS_SRC/.git" ]]; then
     warn "$DRIVERS_SRC already exists — pulling latest..."
@@ -78,56 +82,44 @@ else
     sudo git clone --depth=1 "$DRIVERS_REPO" "$DRIVERS_SRC"
 fi
 
-if [[ ! -f "$DRIVERS_SRC/dkms.conf" ]]; then
-    die "No dkms.conf found in $DRIVERS_SRC — this script expects tuxedo-drivers to support DKMS. Check upstream repo structure."
-fi
+info "Building tuxedo-drivers (this takes a moment)..."
+sudo sh -c "cd '$DRIVERS_SRC' && make -j$(nproc)"
 
-# Reuse upstream's own PACKAGE_NAME from dkms.conf if present.
-if grep -q '^PACKAGE_NAME=' "$DRIVERS_SRC/dkms.conf"; then
-    DKMS_NAME=$(grep '^PACKAGE_NAME=' "$DRIVERS_SRC/dkms.conf" | head -1 | cut -d'=' -f2 | tr -d '"')
-fi
+info "Installing kernel modules..."
+sudo make -C "/lib/modules/$(uname -r)/build" M="$DRIVERS_SRC" modules_install
+sudo depmod -a
+ok "tuxedo-drivers built and installed."
 
-# PACKAGE_VERSION in upstream dkms.conf is often a placeholder like
-# "#MODULE_VERSION#", which distro packagers substitute at build time.
-# A raw `git clone` won't have that substitution done, so do it ourselves —
-# derive a real version string from the git checkout and patch dkms.conf
-# in-place before registering with DKMS.
-RAW_VERSION=""
-if grep -q '^PACKAGE_VERSION=' "$DRIVERS_SRC/dkms.conf"; then
-    RAW_VERSION=$(grep '^PACKAGE_VERSION=' "$DRIVERS_SRC/dkms.conf" | head -1 | cut -d'=' -f2 | tr -d '"')
-fi
+# ---- 3. Auto-rebuild on kernel upgrade ----
+# Debian/Ubuntu's native equivalent of the pacman hook: any executable script
+# placed in /etc/kernel/postinst.d/ is run automatically by the kernel
+# package's postinst, with the new kernel version as $1.
+info "Installing kernel postinst hook for automatic kernel-upgrade rebuilds..."
+sudo install -dm755 /etc/kernel/postinst.d
 
-if [[ -z "$RAW_VERSION" || "$RAW_VERSION" == *"#"* ]]; then
-    if GIT_VERSION=$(sudo git -C "$DRIVERS_SRC" describe --tags --always 2>/dev/null); then
-        DKMS_VERSION="${GIT_VERSION#v}"
-    else
-        DKMS_VERSION="0.0.$(date +%Y%m%d)"
-    fi
-    warn "dkms.conf had a placeholder PACKAGE_VERSION — using derived version $DKMS_VERSION instead."
-    sudo sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$DKMS_VERSION\"/" "$DRIVERS_SRC/dkms.conf"
-else
-    DKMS_VERSION="$RAW_VERSION"
-fi
-info "Using DKMS package: ${DKMS_NAME}/${DKMS_VERSION}"
+sudo tee "$REBUILD_HOOK" > /dev/null << EOF
+#!/usr/bin/env bash
+# Rebuild tuxedo-drivers for a newly installed kernel.
+# Installed by mintinstall.sh — invoked automatically by apt/dpkg via
+# /etc/kernel/postinst.d/ after kernel package installs/upgrades.
+set -e
+KVER="\${1:-\$(uname -r)}"
+KBUILD="/lib/modules/\$KVER/build"
 
-DKMS_DEST="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
-if [[ "$DRIVERS_SRC" != "$DKMS_DEST" ]]; then
-    info "Linking source tree to DKMS-expected path $DKMS_DEST ..."
-    sudo rm -rf "$DKMS_DEST"
-    sudo cp -a "$DRIVERS_SRC" "$DKMS_DEST"
-fi
+[[ -d "\$KBUILD" ]] || { echo "[tuxedo-drivers] No build dir for kernel \$KVER yet, skipping."; exit 0; }
 
-info "Registering and building module with DKMS (this takes a moment)..."
-if sudo dkms status | grep -q "^${DKMS_NAME}/${DKMS_VERSION}"; then
-    warn "DKMS module already registered — removing old registration first."
-    sudo dkms remove "${DKMS_NAME}/${DKMS_VERSION}" --all || true
-fi
-sudo dkms add "$DKMS_DEST"
-sudo dkms build "${DKMS_NAME}/${DKMS_VERSION}"
-sudo dkms install "${DKMS_NAME}/${DKMS_VERSION}"
-ok "tuxedo-drivers built and installed via DKMS — future kernel upgrades will trigger automatic rebuilds."
+echo "[tuxedo-drivers] Rebuilding for kernel \$KVER..."
+cd "$DRIVERS_SRC"
+make clean
+make -C "\$KBUILD" M="$DRIVERS_SRC" -j\$(nproc) modules
+make -C "\$KBUILD" M="$DRIVERS_SRC" modules_install
+depmod -a "\$KVER"
+echo "[tuxedo-drivers] Done."
+EOF
+sudo chmod 755 "$REBUILD_HOOK"
+ok "Kernel postinst hook installed — tuxedo-drivers will rebuild automatically after kernel upgrades."
 
-# ---- 3. Modprobe tuxedo modules now ----
+# ---- 4. Modprobe tuxedo modules now ----
 # clevo_wmi is required to expose white:kbd_backlight on the X6780.
 # tuxedo_keyboard pulls in clevo_acpi and tuxedo_io automatically.
 for mod in tuxedo_keyboard clevo_wmi; do
@@ -143,7 +135,7 @@ else
     warn "Keyboard backlight device not yet visible — a reboot may be needed."
 fi
 
-# ---- 4. Disable TCC daemon ----
+# ---- 5. Disable TCC daemon ----
 info "Stopping and disabling tccd (TCC daemon) ..."
 if systemctl is-active --quiet tccd 2>/dev/null; then
     sudo systemctl disable --now tccd
@@ -155,7 +147,7 @@ else
     warn "tccd service not found — nothing to disable (safe to ignore)."
 fi
 
-# ---- 5. Deploy fan control script ----
+# ---- 6. Deploy fan control script ----
 info "Creating install directory $INSTALL_DIR ..."
 sudo mkdir -p "$INSTALL_DIR"
 
@@ -168,7 +160,7 @@ sudo curl -fsSL "$REPO_RAW/lz4fancontrol.ico" -o "$INSTALL_DIR/lz4fancontrol.ico
 
 ok "Fan control script installed to $INSTALL_DIR"
 
-# ---- 6. Sudoers rule ----
+# ---- 7. Sudoers rule ----
 # Scoped exactly as the script's own docstring expects: the file invoked
 # directly (via its #!/usr/bin/env python3 shebang), not via an interpreter
 # prefix — this must match how ec_call() in the script itself shells out.
@@ -186,7 +178,7 @@ else
 fi
 rm -f "$SUDOERS_TMP"
 
-# ---- 7. XDG autostart entry ----
+# ---- 8. XDG autostart entry ----
 info "Writing autostart entry ..."
 AUTOSTART_DIR="$REAL_HOME/.config/autostart"
 mkdir -p "$AUTOSTART_DIR"
@@ -202,7 +194,7 @@ X-GNOME-Autostart-enabled=true
 EOF
 ok "Autostart entry written to $AUTOSTART_DIR/clevo-fancontrol.desktop"
 
-# ---- 8. Verify install ----
+# ---- 9. Verify install ----
 HELPER_OUT=$(sudo -n "$SCRIPT" --ec-helper 2>&1 || true)
 if [[ -f "$SCRIPT" ]] && echo "$HELPER_OUT" | grep -q "ec-helper"; then
     ok "Privileged helper is reachable via sudo."
@@ -223,5 +215,5 @@ echo "  To launch now:"
 echo "    $SCRIPT &"
 echo ""
 echo "  The tray icon will autostart on next login."
-echo "  tuxedo-drivers will rebuild automatically after kernel upgrades (via DKMS)."
+echo "  tuxedo-drivers will rebuild automatically after kernel upgrades."
 echo ""
