@@ -79,10 +79,12 @@ else
 fi
 
 info "Building tuxedo-drivers (this takes a moment)..."
-sudo make -C "$DRIVERS_SRC" -j"$(nproc)"
+# sudo resets PWD, which causes M=$(PWD) to expand to empty, triggering
+# a full kernel syncconfig that fails on x86 headers. sh -c fixes this.
+sudo sh -c "cd '$DRIVERS_SRC' && make -j$(nproc)"
 
 info "Installing kernel modules..."
-sudo make -C "$DRIVERS_SRC" install
+sudo sh -c "cd '$DRIVERS_SRC' && make install"
 sudo depmod -a
 ok "tuxedo-drivers built and installed."
 
@@ -109,9 +111,9 @@ sudo tee "$REBUILD_BIN" > /dev/null << 'EOF'
 #!/usr/bin/bash
 set -e
 echo "[tuxedo-drivers] Rebuilding for kernel $(uname -r)..."
-make -C /usr/src/tuxedo-drivers clean
-make -C /usr/src/tuxedo-drivers -j$(nproc)
-make -C /usr/src/tuxedo-drivers install
+cd /usr/src/tuxedo-drivers && make clean
+make -j$(nproc)
+make install
 depmod -a
 echo "[tuxedo-drivers] Done."
 EOF
