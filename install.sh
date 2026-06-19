@@ -129,9 +129,10 @@ info "Building tuxedo-drivers (this takes a moment)..."
 sudo sh -c "cd '$DRIVERS_SRC' && make -j$(nproc)"
 
 info "Installing kernel modules..."
-# Use modules_install, not install — the tuxedo-drivers `make install` target
-# also runs `cp -r usr /` which fails when that directory doesn't exist in the repo.
-sudo sh -c "cd '$DRIVERS_SRC' && make modules_install"
+# Use the kernel build system's modules_install target directly, bypassing the
+# tuxedo-drivers `make install` which also runs `cp -r usr /` and crashes when
+# that directory doesn't exist in the repo.
+sudo make -C "/lib/modules/$(uname -r)/build" M="$DRIVERS_SRC" modules_install
 sudo depmod -a
 ok "tuxedo-drivers built and installed."
 
@@ -186,7 +187,7 @@ fi
 
 cd /usr/src/tuxedo-drivers && make clean
 make -j$(nproc)
-make modules_install
+make -C "/lib/modules/$(uname -r)/build" M=/usr/src/tuxedo-drivers modules_install
 depmod -a
 echo "[tuxedo-drivers] Done."
 EOF
