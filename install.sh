@@ -81,7 +81,16 @@ fi
 info "Preparing kernel headers (generates autoconf.h — needed on Arch)..."
 # Arch linux-headers ships without running make prepare, so generated/autoconf.h
 # does not exist yet. This is required before any out-of-tree module build.
-sudo make -C "/lib/modules/$(uname -r)/build" prepare
+# Avoid `make prepare` — it runs syncconfig over the full Kconfig tree and fails
+# on x86 headers when the config references ARM crypto Kconfig files (Arch quirk).
+# scripts_basic + modules_prepare generate exactly what out-of-tree modules need.
+KBUILD="/lib/modules/$(uname -r)/build"
+if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]]; then
+    sudo make -C "$KBUILD" scripts_basic
+    sudo make -C "$KBUILD" modules_prepare
+else
+    ok "autoconf.h already exists, skipping prepare."
+fi
 
 info "Building tuxedo-drivers (this takes a moment)..."
 # sudo resets PWD, which causes M=$(PWD) to expand to empty, triggering
@@ -116,7 +125,11 @@ sudo tee "$REBUILD_BIN" > /dev/null << 'EOF'
 #!/usr/bin/bash
 set -e
 echo "[tuxedo-drivers] Rebuilding for kernel $(uname -r)..."
-make -C "/lib/modules/$(uname -r)/build" prepare
+KBUILD="/lib/modules/$(uname -r)/build"
+if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]]; then
+    make -C "$KBUILD" scripts_basic
+    make -C "$KBUILD" modules_prepare
+fi
 cd /usr/src/tuxedo-drivers && make clean
 make -j$(nproc)
 make install
