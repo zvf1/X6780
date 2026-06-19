@@ -271,7 +271,7 @@ ok "Autostart entry written to $AUTOSTART_DIR/clevo-fancontrol.desktop"
 
 # ---- 10. Smoke test: verify sudo path works ----
 info "Testing privileged helper path..."
-if sudo -n "$SCRIPT" --ec-helper 2>&1 | grep -q "usage:"; then
+if sudo -n "$SCRIPT" --ec-helper 2>&1 | grep -q "ec-helper"; then
     ok "Privileged helper is reachable via sudo."
 else
     warn "Could not confirm helper path — check the sudoers rule manually:"
