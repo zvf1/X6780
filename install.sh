@@ -78,6 +78,11 @@ else
     sudo git clone --depth=1 "$DRIVERS_REPO" "$DRIVERS_SRC"
 fi
 
+info "Preparing kernel headers (generates autoconf.h — needed on Arch)..."
+# Arch linux-headers ships without running make prepare, so generated/autoconf.h
+# does not exist yet. This is required before any out-of-tree module build.
+sudo make -C "/lib/modules/$(uname -r)/build" prepare
+
 info "Building tuxedo-drivers (this takes a moment)..."
 # sudo resets PWD, which causes M=$(PWD) to expand to empty, triggering
 # a full kernel syncconfig that fails on x86 headers. sh -c fixes this.
@@ -111,6 +116,7 @@ sudo tee "$REBUILD_BIN" > /dev/null << 'EOF'
 #!/usr/bin/bash
 set -e
 echo "[tuxedo-drivers] Rebuilding for kernel $(uname -r)..."
+make -C "/lib/modules/$(uname -r)/build" prepare
 cd /usr/src/tuxedo-drivers && make clean
 make -j$(nproc)
 make install
