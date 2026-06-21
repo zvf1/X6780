@@ -16,6 +16,11 @@ curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
 ```
 
+**Windows 10 x64**
+```powershell
+irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
+```
+
 ## Uninstall
 
 **Linux Mint / Ubuntu-based**
@@ -28,6 +33,10 @@ curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/uninstall.sh |
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/uninstall.sh | bash
 ```
 
+**Windows 10 x64**
+```powershell
+irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
+```
 ---
 
 ## Features
