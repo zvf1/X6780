@@ -17,7 +17,7 @@
          package instead, either works: -->
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
     <!-- Needed by Keyboard.cs to call the Clevo ACPI/WMI control method. -->
-    <PackageReference Include="System.Management" Version="8.0.0" />
+    <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>
