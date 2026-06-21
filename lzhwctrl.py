@@ -57,6 +57,7 @@ ONE-TIME SETUP
 import os
 import sys
 import time
+import json
 import threading
 import subprocess
 import tkinter as tk
@@ -72,17 +73,34 @@ except Exception:
 script_dir = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(script_dir, "lzhwctrl.ico")
 
+# Persistent state file — saves fan/kb/freq selections across reboots.
+STATE_FILE = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "lzhwctrl", "state.json"
+)
+
+# CPU frequency cap buttons. Values are in kHz (as cpupower expects),
+# None = AUTO (remove cap, restore to hardware max).
+CPU_FREQ_BUTTONS = [
+    ("AUTO", None),
+    ("1.8",  1800000),
+    ("2.0",  2000000),
+    ("2.2",  2200000),
+    ("2.4",  2400000),
+    ("2.6",  2600000),
+    ("2.8",  2800000),
+]
+
 # Temperature (C) -> fan duty (0x00-0xFF). Carried over from the
 # Windows version, unchanged — the EC protocol and duty scale are
 # identical on Linux.
 FAN_CURVE = [
     (0,  0x60),
-    (40, 0x60),
-    (50, 0x80),
-    (60, 0x90),
-    (70, 0xB0),
-    (80, 0xD0),
-    (90, 0xFF),
+    (40, 0x80),
+    (50, 0x90),
+    (65, 0xB0),
+    (72, 0xD0),
+    (77, 0xFF),
 ]
 
 FAN_BUTTONS = [
@@ -124,7 +142,31 @@ state = {
 
 cpu_override = None
 gpu_override = None
+cpu_freq_override = None   # None = AUTO, integer = kHz cap
 override_lock = threading.Lock()
+
+
+# ---- PERSISTENT PREFERENCES ----
+
+def load_prefs():
+    """Return saved prefs dict, or empty dict if none/corrupt."""
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_prefs(**kwargs):
+    """Merge kwargs into the saved prefs file."""
+    prefs = load_prefs()
+    prefs.update(kwargs)
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(prefs, f, indent=2)
+    except OSError as e:
+        print(f"[prefs] could not save: {e}", file=sys.stderr)
 
 
 # =====================================================================
@@ -190,7 +232,7 @@ def ec_helper_main(argv):
         sys.exit(1)
 
     if not argv:
-        print("usage: --ec-helper [set IDX DUTY | reset | kb VALUE]", file=sys.stderr)
+        print("usage: --ec-helper [set IDX DUTY | reset | kb VALUE | cpufreq MAX_KHZ]", file=sys.stderr)
         sys.exit(1)
 
     cmd = argv[0]
@@ -234,6 +276,32 @@ def ec_helper_main(argv):
             print(f"failed to write keyboard brightness: {e}", file=sys.stderr)
             sys.exit(1)
 
+    elif cmd == "cpufreq" and len(argv) == 2:
+        # argv[1] is max frequency in kHz, or "auto" to remove the cap.
+        arg = argv[1].lower()
+        if arg == "auto":
+            # Remove the upper limit — restore to hardware maximum.
+            result = subprocess.run(
+                ["cpupower", "frequency-set", "-u", "0"],
+                capture_output=True
+            )
+        else:
+            try:
+                khz = int(arg)
+            except ValueError:
+                print("invalid frequency value", file=sys.stderr)
+                sys.exit(1)
+            if khz <= 0:
+                print("frequency must be > 0 kHz", file=sys.stderr)
+                sys.exit(1)
+            result = subprocess.run(
+                ["cpupower", "frequency-set", "-u", f"{khz}kHz"],
+                capture_output=True
+            )
+        if result.returncode != 0:
+            print(result.stderr.decode(errors="replace").strip(), file=sys.stderr)
+            sys.exit(result.returncode)
+
     else:
         print("unknown or malformed --ec-helper command", file=sys.stderr)
         sys.exit(1)
@@ -269,6 +337,13 @@ def set_gpu_fans(duty):
 
 def reset_to_ec_control():
     ec_call("reset", timeout=10)
+
+
+def set_cpu_freq(khz):
+    """Set CPU max frequency via the privileged helper.
+    khz=None removes the cap (AUTO)."""
+    arg = "auto" if khz is None else str(khz)
+    ec_call("cpufreq", arg)
 
 
 def get_duty_for_temp(temp):
@@ -444,7 +519,7 @@ def build_window():
     cpu_fan_bar, cpu_fan_lbl = make_fan_row(fan_card, "CPU")
     gpu_fan_bar, gpu_fan_lbl = make_fan_row(fan_card, "GPU")
 
-    def make_fan_buttons(parent, label, set_override_fn):
+    def make_fan_buttons(parent, label, set_override_fn, pref_key, initial_duty):
         section = tk.Frame(parent, bg=CARD, pady=10)
         section.pack(fill="x", padx=18, pady=(0, 6))
         header = tk.Frame(section, bg=CARD)
@@ -457,6 +532,7 @@ def build_window():
 
         def on_click(duty, btns):
             set_override_fn(duty)
+            save_prefs(**{pref_key: duty})
             for d, b in btns.items():
                 if d == duty:
                     b.config(bg=ACCENT, fg="#1a1a1a")
@@ -464,11 +540,11 @@ def build_window():
                     b.config(bg="#333333", fg=SUBTEXT)
 
         for lbl_text, duty in FAN_BUTTONS:
-            is_auto = (duty is None)
+            is_active = (duty == initial_duty)
             btn = tk.Button(
                 btn_frame, text=lbl_text, font=("Consolas", 8, "bold"),
-                bg=ACCENT if is_auto else "#333333",
-                fg="#1a1a1a" if is_auto else SUBTEXT,
+                bg=ACCENT if is_active else "#333333",
+                fg="#1a1a1a" if is_active else SUBTEXT,
                 activebackground=ACCENT, activeforeground="#1a1a1a",
                 relief="flat", padx=5, pady=4, cursor="hand2",
             )
@@ -491,8 +567,46 @@ def build_window():
             gpu_override = duty
 
     tk.Frame(window_root, bg=BG, height=6).pack(fill="x")
-    make_fan_buttons(window_root, "CPU FAN", set_cpu_override)
-    make_fan_buttons(window_root, "GPU FAN", set_gpu_override)
+    make_fan_buttons(window_root, "CPU FAN", set_cpu_override, "cpu_fan", cpu_override)
+    make_fan_buttons(window_root, "GPU FAN", set_gpu_override, "gpu_fan", gpu_override)
+
+    # ---- CPU FREQ buttons ----
+    freq_section = tk.Frame(window_root, bg=CARD, pady=10)
+    freq_section.pack(fill="x", padx=18, pady=(0, 6))
+    freq_header = tk.Frame(freq_section, bg=CARD)
+    freq_header.pack(fill="x", padx=14, pady=(0, 8))
+    tk.Label(freq_header, text="CPU FREQ", font=("Consolas", 9),
+             bg=CARD, fg=SUBTEXT, anchor="w").pack(side="left")
+    freq_btn_frame = tk.Frame(freq_section, bg=CARD)
+    freq_btn_frame.pack(fill="x", padx=14)
+    freq_refs = {}
+
+    def on_freq_click(khz, btns):
+        global cpu_freq_override
+        with override_lock:
+            cpu_freq_override = khz
+        set_cpu_freq(khz)
+        save_prefs(cpu_freq=khz)
+        for k, b in btns.items():
+            if k == khz:
+                b.config(bg=ACCENT, fg="#1a1a1a")
+            else:
+                b.config(bg="#333333", fg=SUBTEXT)
+
+    for lbl_text, khz in CPU_FREQ_BUTTONS:
+        is_active = (khz == cpu_freq_override)
+        btn = tk.Button(
+            freq_btn_frame, text=lbl_text, font=("Consolas", 8, "bold"),
+            bg=ACCENT if is_active else "#333333",
+            fg="#1a1a1a" if is_active else SUBTEXT,
+            activebackground=ACCENT, activeforeground="#1a1a1a",
+            relief="flat", padx=5, pady=4, cursor="hand2",
+        )
+        btn.pack(side="left", padx=(0, 4))
+        freq_refs[khz] = btn
+
+    for khz, btn in freq_refs.items():
+        btn.config(command=lambda k=khz, b=freq_refs: on_freq_click(k, b))
 
     kb_card = tk.Frame(window_root, bg=CARD, pady=10)
     kb_card.pack(fill="x", padx=18)
@@ -504,15 +618,17 @@ def build_window():
 
     def on_kb_click(level):
         set_kb_level(level)
+        save_prefs(kb_level=level)
         for lvl, btn in kb_refs.items():
             btn.config(bg=ACCENT if lvl == level else "#333333",
                        fg="#1a1a1a" if lvl == level else SUBTEXT)
 
+    saved_kb = load_prefs().get("kb_level", 0)
     for i, lbl_text in enumerate(["Off", "1", "2", "3", "4", "5"]):
         btn = tk.Button(
             kb_btn_frame, text=lbl_text, font=("Consolas", 9, "bold"),
-            bg=ACCENT if i == 0 else "#333333",
-            fg="#1a1a1a" if i == 0 else SUBTEXT,
+            bg=ACCENT if i == saved_kb else "#333333",
+            fg="#1a1a1a" if i == saved_kb else SUBTEXT,
             activebackground=ACCENT, activeforeground="#1a1a1a",
             relief="flat", padx=8, pady=4, cursor="hand2",
             command=lambda lvl=i: on_kb_click(lvl)
@@ -629,7 +745,25 @@ def control_loop():
 # ---- ENTRY POINT ----
 
 def main():
-    set_kb_level(0)
+    global cpu_override, gpu_override, cpu_freq_override
+
+    # ---- Restore saved preferences ----
+    prefs = load_prefs()
+
+    saved_cpu_fan  = prefs.get("cpu_fan",  None)   # None = AUTO
+    saved_gpu_fan  = prefs.get("gpu_fan",  None)
+    saved_cpu_freq = prefs.get("cpu_freq", None)   # None = AUTO
+    saved_kb       = prefs.get("kb_level", 0)
+
+    with override_lock:
+        cpu_override      = saved_cpu_fan
+        gpu_override      = saved_gpu_fan
+        cpu_freq_override = saved_cpu_freq
+
+    # Apply immediately so settings are live before the GUI appears.
+    set_kb_level(saved_kb)
+    if saved_cpu_freq is not None:
+        set_cpu_freq(saved_cpu_freq)
 
     fan_thread = threading.Thread(target=control_loop, daemon=True)
     fan_thread.start()
