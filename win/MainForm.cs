@@ -44,20 +44,20 @@ namespace LzHwCtrl
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox     = false;
             AutoScroll      = false;
+            // 7 fan buttons × 62 px + 78 px label + 24 px padding = ~560 px client width.
+            // Height is driven by row count; 220 px fits 4 rows + temp + status comfortably.
+            ClientSize      = new Size(560, 220);
 
             // ── Outer layout ────────────────────────────────────────────────
-            // A TableLayoutPanel gives each row its own horizontal band so
-            // nothing can overlap or overflow, and AutoSize on the form means
-            // the window grows to fit whatever the DPI/font scaling demands.
+            // TableLayoutPanel fills the form so rows always have room to
+            // render all their buttons without clipping.
             var table = new TableLayoutPanel
             {
-                Dock        = DockStyle.Top,
-                AutoSize    = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock        = DockStyle.Fill,
                 ColumnCount = 1,
                 Padding     = new Padding(12, 10, 12, 8),
             };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
             // Temp labels
             var tempPanel = new FlowLayoutPanel
@@ -83,10 +83,6 @@ namespace LzHwCtrl
 
             Controls.Add(table);
             Controls.Add(_statusLbl);
-
-            // Resize form to fit content after layout is done.
-            AutoSize     = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
             var appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             Icon = appIcon;
