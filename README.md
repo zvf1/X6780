@@ -17,11 +17,11 @@ curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintoptional.s
 **Arch / EndeavourOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
-
+```
 Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/updater)
+```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosoptional.sh | bash
 ```
-
 **Windows 10 x64**
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
