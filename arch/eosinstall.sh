@@ -56,7 +56,7 @@ info "Detected kernel $KERNEL → headers package: $HEADERS_PKG"
 
 # ---- 2. Pacman dependencies ----
 info "Installing pacman dependencies..."
-DEPS=(git base-devel "$HEADERS_PKG" python python-pillow python-pystray tk)
+DEPS=(git base-devel "$HEADERS_PKG" python python-pillow python-pystray tk cpupower)
 MISSING=()
 for pkg in "${DEPS[@]}"; do
     pacman -Qi "$pkg" &>/dev/null || MISSING+=("$pkg")
