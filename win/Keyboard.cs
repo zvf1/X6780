@@ -20,19 +20,16 @@ namespace LzHwCtrl
     /// under root\WMI -- this is the same mechanism, not an emulation of
     /// it, so no kernel driver or admin rights are needed for this part.
     ///
-    /// The one thing that's genuinely BIOS/vendor-specific (and not in the
-    /// driver source, hence not guessable) is what Windows *names* the
-    /// generated class and its methods. So instead of hardcoding a class
-    /// name I might get wrong, this finds it at runtime by matching the
-    /// "guid" qualifier -- exactly like clevo_wmi.c's own probe routine
-    /// matches wmi_has_guid(CLEVO_WMI_METHOD_GUID) before trusting it.
-    ///
     /// Run discover-clevo-wmi.ps1 first to see the discovered class/method
     /// names on your actual hardware and sanity-check this against it.
     /// </summary>
     internal static class Keyboard
     {
-        private const string ClevoWmiMethodGuid = "{ABBC0F6D-8EA1-11D1-00A0-C90629100000}";
+        // Stored both with and without braces because WMI returns the GUID
+        // qualifier in either form depending on the BIOS/Windows version.
+        private const string ClevoWmiMethodGuidNoBraces = "ABBC0F6D-8EA1-11D1-00A0-C90629100000";
+        private const string ClevoWmiMethodGuidBraces   = "{ABBC0F6D-8EA1-11D1-00A0-C90629100000}";
+
         private const byte CmdSetKbWhiteLeds = 0x27;
         private const byte CmdGetKbWhiteLeds = 0x3D;
 
@@ -61,11 +58,33 @@ namespace LzHwCtrl
         }
 
         /// <summary>
+        /// Returns true if <paramref name="raw"/> matches the Clevo WMI method
+        /// GUID, regardless of whether WMI returned it with or without braces
+        /// and regardless of case.
+        /// </summary>
+        private static bool IsClevoGuid(string raw)
+        {
+            if (raw == null) return false;
+            var s = raw.Trim();
+            return string.Equals(s, ClevoWmiMethodGuidNoBraces, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(s, ClevoWmiMethodGuidBraces,   StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Finds the WMI class Windows generated for CLEVO_WMI_METHOD_GUID,
         /// then finds the method whose WmiMethodId qualifier matches `cmd`
         /// (the ACPI/WMI mapper preserves the firmware's method IDs exactly,
         /// so this is the same 0x27/0x3D values clevo_wmi.c uses -- not a
         /// re-numbering), and invokes it.
+        ///
+        /// FIX: The original code compared the GUID string including literal
+        /// curly braces against the WMI qualifier value, which on many boards
+        /// is returned WITHOUT braces -- causing every keyboard button click
+        /// to silently do nothing. IsClevoGuid() now accepts both forms.
+        ///
+        /// FIX: WmiMethodId is stored as an integer qualifier by wmiacpi.sys,
+        /// not a string, so byte.TryParse() always failed. Convert.ToByte()
+        /// handles both int and string qualifier values.
         /// </summary>
         private static bool InvokeClevoMethod(byte cmd, uint arg, out uint result)
         {
@@ -81,10 +100,14 @@ namespace LzHwCtrl
                 foreach (ManagementBaseObject c in classQuery.GetSubclasses())
                 {
                     using var mc = (ManagementClass)c;
-                    var guidQualifier = TryGetQualifier(mc.Qualifiers, "guid");
-                    if (string.Equals(guidQualifier, ClevoWmiMethodGuid, StringComparison.OrdinalIgnoreCase))
+                    var guidVal = TryGetQualifierValue(mc.Qualifiers, "guid");
+                    if (IsClevoGuid(guidVal?.ToString()))
                     {
-                        targetClass = mc;
+                        // Don't dispose mc yet -- we need it as targetClass.
+                        // Re-open a fresh instance so the using block above
+                        // doesn't close it out from under us.
+                        targetClass = new ManagementClass(scope,
+                            new ManagementPath(mc.ClassPath.ClassName), null);
                         break;
                     }
                 }
@@ -98,60 +121,71 @@ namespace LzHwCtrl
                     return false;
                 }
 
-                string targetMethodName = null;
-                foreach (MethodData method in targetClass.Methods)
+                using (targetClass)
                 {
-                    var idQualifier = TryGetQualifier(method.Qualifiers, "WmiMethodId");
-                    if (idQualifier != null && byte.TryParse(idQualifier, out byte methodId) && methodId == cmd)
+                    string targetMethodName = null;
+                    foreach (MethodData method in targetClass.Methods)
                     {
-                        targetMethodName = method.Name;
-                        break;
-                    }
-                }
-
-                if (targetMethodName == null)
-                {
-                    Console.Error.WriteLine(
-                        $"[kb] Found the Clevo WMI class ({targetClass.ClassPath.ClassName}) " +
-                        $"but no method with WmiMethodId 0x{cmd:X2}. Run discover-clevo-wmi.ps1 " +
-                        "to see what methods actually exist on this board.");
-                    return false;
-                }
-
-                using var searcher = new ManagementObjectSearcher(scope,
-                    new ObjectQuery($"SELECT * FROM {targetClass.ClassPath.ClassName}"));
-                using var instanceEnum = searcher.Get().GetEnumerator();
-                if (!instanceEnum.MoveNext())
-                {
-                    Console.Error.WriteLine("[kb] Clevo WMI class has no instances.");
-                    return false;
-                }
-
-                using var instance = (ManagementObject)instanceEnum.Current;
-                var inParams = targetClass.GetMethodParameters(targetMethodName);
-
-                // Most BIOS-generated classes following the Microsoft sample
-                // pattern name the single in-param "Data" (uint32). If this
-                // board's BIOS named it differently, fall back to whatever
-                // the single declared in-param actually is.
-                string inParamName = "Data";
-                foreach (PropertyData p in inParams.Properties)
-                {
-                    inParamName = p.Name;
-                    break; // there's normally exactly one
-                }
-                inParams[inParamName] = arg;
-
-                var outParams = instance.InvokeMethod(targetMethodName, inParams, null);
-
-                if (outParams != null)
-                {
-                    foreach (PropertyData p in outParams.Properties)
-                    {
-                        if (p.Value != null)
+                        // WmiMethodId is registered as an integer qualifier by
+                        // wmiacpi.sys. Convert.ToByte handles int, uint, string, etc.
+                        var idVal = TryGetQualifierValue(method.Qualifiers, "WmiMethodId");
+                        if (idVal == null) continue;
+                        try
                         {
-                            result = Convert.ToUInt32(p.Value);
-                            break;
+                            byte methodId = Convert.ToByte(idVal);
+                            if (methodId == cmd)
+                            {
+                                targetMethodName = method.Name;
+                                break;
+                            }
+                        }
+                        catch { /* qualifier exists but isn't a numeric type -- skip */ }
+                    }
+
+                    if (targetMethodName == null)
+                    {
+                        Console.Error.WriteLine(
+                            $"[kb] Found the Clevo WMI class ({targetClass.ClassPath.ClassName}) " +
+                            $"but no method with WmiMethodId 0x{cmd:X2}. Run discover-clevo-wmi.ps1 " +
+                            "to see what methods actually exist on this board.");
+                        return false;
+                    }
+
+                    using var searcher = new ManagementObjectSearcher(scope,
+                        new ObjectQuery($"SELECT * FROM {targetClass.ClassPath.ClassName}"));
+                    using var instanceEnum = searcher.Get().GetEnumerator();
+                    if (!instanceEnum.MoveNext())
+                    {
+                        Console.Error.WriteLine("[kb] Clevo WMI class has no instances.");
+                        return false;
+                    }
+
+                    using var instance = (ManagementObject)instanceEnum.Current;
+                    var inParams = targetClass.GetMethodParameters(targetMethodName);
+
+                    // Most BIOS-generated classes following the Microsoft sample
+                    // pattern name the single in-param "Data" (uint32). If this
+                    // board's BIOS named it differently, fall back to whatever
+                    // the single declared in-param actually is.
+                    string inParamName = "Data";
+                    foreach (PropertyData p in inParams.Properties)
+                    {
+                        inParamName = p.Name;
+                        break; // there's normally exactly one
+                    }
+                    inParams[inParamName] = arg;
+
+                    var outParams = instance.InvokeMethod(targetMethodName, inParams, null);
+
+                    if (outParams != null)
+                    {
+                        foreach (PropertyData p in outParams.Properties)
+                        {
+                            if (p.Value != null)
+                            {
+                                result = Convert.ToUInt32(p.Value);
+                                break;
+                            }
                         }
                     }
                 }
@@ -165,9 +199,9 @@ namespace LzHwCtrl
             }
         }
 
-        private static string TryGetQualifier(QualifierDataCollection qualifiers, string name)
+        private static object TryGetQualifierValue(QualifierDataCollection qualifiers, string name)
         {
-            try { return qualifiers[name]?.Value?.ToString(); }
+            try { return qualifiers[name]?.Value; }
             catch { return null; }
         }
     }
