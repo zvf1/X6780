@@ -23,7 +23,7 @@
 
 set -uo pipefail
 
-RAW_BASE="https://raw.githubusercontent.com/zvf1/X6780/refs/heads/main/arch"
+RAW_BASE="https://raw.githubusercontent.com/zvf1/X6780/main/arch"
 SCRIPT_PATH="/usr/local/sbin/eosoptional.sh"
 SERVICE_PATH="/etc/systemd/system/eosoptional.service"
 
