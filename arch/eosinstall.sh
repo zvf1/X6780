@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install.sh — Clevo fan/keyboard control for X6780 (Arch/EndeavourOS)
-# Usage: curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/eosinstall.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
 set -euo pipefail
 
 # ---- Colour helpers ----
@@ -11,7 +11,7 @@ die()   { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 ok()    { echo -e "${GREEN}[✓]${NC} $*"; }
 
 # ---- Constants ----
-REPO_RAW="https://raw.githubusercontent.com/zvf1/X6780/main/mint"
+REPO_RAW="https://raw.githubusercontent.com/zvf1/X6780/main"
 DRIVERS_REPO="https://github.com/zvf1/tuxedo-drivers"
 INSTALL_DIR="/opt/clevo-fancontrol"
 SCRIPT="$INSTALL_DIR/lzhwctrl.py"
