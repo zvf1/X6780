@@ -73,18 +73,55 @@ try {
 } catch {}
 
 if (-not $dotnetOk) {
-    Info ".NET SDK not found - attempting install via winget..."
+    Info ".NET SDK not found - attempting install..."
+
+    # Try winget first, if present.
     if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Info "winget found - installing .NET 8 SDK via winget..."
         winget install --id Microsoft.DotNet.SDK.8 -e --accept-package-agreements --accept-source-agreements
         $dotnetVer = (dotnet --version) 2>$null
-        if (-not $dotnetVer) {
-            Die "winget install finished but 'dotnet' still isn't on PATH. Open a new terminal and re-run this script."
-        }
+        if ($dotnetVer) { $dotnetOk = $true }
     } else {
-        Die "winget not available. Install the .NET 8 SDK manually from https://dotnet.microsoft.com/download then re-run this script."
+        Warn "winget not available on this machine."
+    }
+
+    # Fall back to Microsoft's official dotnet-install.ps1 script, which
+    # only needs PowerShell + internet access (no winget/Store dependency).
+    # It installs to the standard machine-wide location so the resulting
+    # apphost (LzHwCtrl.exe) can find the runtime without any extra setup.
+    if (-not $dotnetOk) {
+        Info "Falling back to Microsoft's dotnet-install.ps1 script..."
+        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+        $dotnetInstallScript = "$WorkDir\dotnet-install.ps1"
+        Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $dotnetInstallScript -UseBasicParsing
+
+        $dotnetInstallDir = "$env:ProgramFiles\dotnet"
+        & $dotnetInstallScript -Channel 8.0 -InstallDir $dotnetInstallDir -NoPath
+        if ($LASTEXITCODE -ne 0) {
+            Die "dotnet-install.ps1 failed - see output above. Install the .NET 8 SDK manually from https://dotnet.microsoft.com/download then re-run this script."
+        }
+
+        # Make 'dotnet' usable for the rest of *this* session immediately...
+        if (($env:Path -split ';') -notcontains $dotnetInstallDir) {
+            $env:Path = "$dotnetInstallDir;$env:Path"
+        }
+
+        # ...and persist it to the machine PATH so new terminals see it too.
+        $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        if (($machinePath -split ';') -notcontains $dotnetInstallDir) {
+            [Environment]::SetEnvironmentVariable('Path', "$machinePath;$dotnetInstallDir", 'Machine')
+        }
+
+        $dotnetVer = (dotnet --version) 2>$null
+        if ($dotnetVer) { $dotnetOk = $true }
+    }
+
+    if (-not $dotnetOk) {
+        Die "Could not install the .NET 8 SDK automatically. Install it manually from https://dotnet.microsoft.com/download then re-run this script."
     }
 }
 Ok ".NET SDK $((dotnet --version)) available."
+
 
 # ---- 2. Fetch the repo ----
 Info "Downloading repo from $RepoZip ..."
