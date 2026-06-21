@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # mintinstall.sh — Clevo fan/keyboard control for X6780 (Linux Mint / Ubuntu-based)
-# Usage: curl -fsSL https://raw.githubusercontent.com/zvf1/X6780fc/main/mintinstall.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh | bash
 set -euo pipefail
 
 # ---- Colour helpers ----
@@ -11,10 +11,10 @@ die()   { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 ok()    { echo -e "${GREEN}[✓]${NC} $*"; }
 
 # ---- Constants ----
-REPO_RAW="https://raw.githubusercontent.com/zvf1/X6780fc/main"
+REPO_RAW="https://raw.githubusercontent.com/zvf1/X6780/main"
 DRIVERS_REPO="https://github.com/zvf1/tuxedo-drivers"
 INSTALL_DIR="/opt/clevo-fancontrol"
-SCRIPT="$INSTALL_DIR/clevo_fancontrol.py"
+SCRIPT="$INSTALL_DIR/lzhwctrl.py"
 SUDOERS_FILE="/etc/sudoers.d/clevo-fancontrol"
 DRIVERS_SRC="/usr/src/tuxedo-drivers"
 REBUILD_HOOK="/etc/kernel/postinst.d/zz-tuxedo-drivers-rebuild"
@@ -47,7 +47,7 @@ info "Installing apt dependencies..."
 DEPS=(git build-essential "linux-headers-$(uname -r)" python3 python3-pip python3-tk python3-pil)
 sudo apt-get install -y "${DEPS[@]}"
 
-# clevo_fancontrol.py is invoked by `sudo` directly via its own
+# lzhwctrl.py is invoked by `sudo` directly via its own
 # #!/usr/bin/env python3 shebang (see EC_HELPER_SCRIPT in the script) — there
 # is no wrapper interpreter in that call. That means pystray/Pillow MUST be
 # importable by the *system* python3, not a venv, or every privileged
@@ -151,12 +151,12 @@ fi
 info "Creating install directory $INSTALL_DIR ..."
 sudo mkdir -p "$INSTALL_DIR"
 
-info "Downloading clevo_fancontrol.py ..."
-sudo curl -fsSL "$REPO_RAW/clevo_fancontrol.py" -o "$SCRIPT"
+info "Downloading lzhwctrl.py ..."
+sudo curl -fsSL "$REPO_RAW/lzhwctrl.py" -o "$SCRIPT"
 sudo chmod 755 "$SCRIPT"
 
 info "Downloading icon ..."
-sudo curl -fsSL "$REPO_RAW/lz4fancontrol.ico" -o "$INSTALL_DIR/lz4fancontrol.ico"
+sudo curl -fsSL "$REPO_RAW/lzhwctrl.ico" -o "$INSTALL_DIR/lzhwctrl.ico"
 
 ok "Fan control script installed to $INSTALL_DIR"
 
@@ -188,7 +188,7 @@ Type=Application
 Name=Clevo Fan Control
 Comment=Fan and keyboard backlight control for Clevo X6780
 Exec=$SCRIPT
-Icon=$INSTALL_DIR/lz4fancontrol.ico
+Icon=$INSTALL_DIR/lzhwctrl.ico
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
