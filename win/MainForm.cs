@@ -127,7 +127,7 @@ namespace LzHwCtrl
             {
                 int level = i;
                 var btn = new Button { Text = labels[i], AutoSize = true };
-                btn.Click += (_, __) => Keyboard.SetLevel(level); // see Keyboard.cs TODO
+                btn.Click += (_, __) => Keyboard.SetLevel(level);
                 panel.Controls.Add(btn);
             }
             return panel;

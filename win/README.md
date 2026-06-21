@@ -1,10 +1,3 @@
-```powershell
-irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
-```
-```powershell
-irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
-```
-
 # lzhwctrl for Windows 10 x64
 
 A C# WinForms port of `lzhwctrl.py`, using the two dependencies you already
@@ -34,17 +27,29 @@ LibreHardwareMonitorLib for CPU/GPU temps (replaces the hwmon lookups).
   UI buttons as percentages instead of the kHz values your Python buttons
   used -- map them to whatever feels right for your i7-6700HQ's turbo
   range.
-- **Keyboard backlight** (`Keyboard.cs`) -- **not implemented**, currently
-  a no-op. The Linux driver (`tuxedo_keyboard`, via your `tuxedo-drivers`
-  fork) exposes brightness as a plain LED class device, but under the
-  hood it's still sending an EC command sequence I don't have the exact
-  bytes for on this board revision -- it's not the same command as the
-  fan-duty write (0x99). The fastest path to finish this: open the
-  brightness/`store` callback for `tuxedo_keyboard` in your forked repo,
-  find the EC command byte(s) it issues, then port that sequence into
-  `Keyboard.cs` the same way `EcPort.SetFan` is structured. I didn't want
-  to guess at undocumented EC bytes for hardware control and ship that as
-  if it were verified.
+- **Keyboard backlight** (`Keyboard.cs`) -- **now implemented**, not a stub
+  anymore. Turns out this board's backlight isn't an EC port write at all --
+  `tuxedo-drivers`' `clevo_leds.h`/`clevo_wmi.c` showed it's a standard ACPI
+  WMI control-method call (GUID `ABBC0F6D-8EA1-11D1-00A0-C90629100000`,
+  method `0x27` to set / `0x3D` to get brightness). Windows' own
+  `wmiacpi.sys` mapper reads the exact same firmware table and exposes a
+  WMI class for it under `root\WMI` -- so this uses plain `System.Management`,
+  no driver, no admin rights needed for this one piece.
+
+  The class/method *names* Windows generates are BIOS-specific and weren't
+  in the driver source, so `Keyboard.cs` finds them at runtime by matching
+  the `guid` qualifier rather than hardcoding a guess. Run
+  `discover-clevo-wmi.ps1` first (no admin needed) to see what your BIOS
+  actually calls things, and sanity-check it lines up with what
+  `Keyboard.cs` finds.
+
+  One thing I genuinely can't verify without the hardware: whether this
+  board's white backlight is the 3-step variant (off/half/full,
+  `CLEVO_KBD_BRIGHTNESS_WHITE_MAX = 0x02`) or the 6-step variant used on
+  some <=7th-gen boards (`..._MAX_5 = 0x05`). I assumed 6-step since your
+  i7-6700HQ is 6th gen, matching the existing 0-5 button row 1:1. If only
+  3 distinct brightness levels actually show up, halve/round the level
+  before calling `SetLevel`.
 
 ## Build
 
