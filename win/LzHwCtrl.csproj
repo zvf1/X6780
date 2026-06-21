@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>LzHwCtrl</RootNamespace>
+    <AssemblyName>LzHwCtrl</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Drop the LibreHardwareMonitorLib.dll (and its other DLLs) from
+         ../LibreHardwareMonitor/ next to this project, or restore the
+         package instead -- either works: -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- inpoutx64.dll must be copied to the output dir alongside the exe.
+         Easiest: drop a copy in this project folder and uncomment below. -->
+    <!--
+    <None Include="inpoutx64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    -->
+  </ItemGroup>
+
+</Project>
