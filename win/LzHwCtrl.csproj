@@ -9,6 +9,7 @@
     <RootNamespace>LzHwCtrl</RootNamespace>
     <AssemblyName>LzHwCtrl</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\lzhwctrl.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
