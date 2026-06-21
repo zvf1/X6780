@@ -35,12 +35,21 @@ namespace LzHwCtrl
             _loop.Start();
 
             Text = "lzhwctrl";
-            Width = 340;
-            Height = 420;
+            Width = 600;
+            Height = 480;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
+            AutoScroll = true; // safety net if a future row ever doesn't fit
 
-            var layout = new FlowLayoutPanel { Dock = DockStyle.Top, FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10) };
+            var layout = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                FlowDirection = FlowDirection.TopDown,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = false, // rows stack vertically, never spill into a 2nd column
+                Padding = new Padding(10),
+            };
 
             layout.Controls.Add(new Label { Text = "CPU temp:", AutoSize = true });
             layout.Controls.Add(_cpuTempLbl);
@@ -55,9 +64,15 @@ namespace LzHwCtrl
             Controls.Add(layout);
             Controls.Add(_statusLbl);
 
+            // lzhwctrl.ico is embedded into the exe via <ApplicationIcon> in the
+            // csproj, so pull it back out at runtime instead of hardcoding a
+            // separate file path -- one less thing for install.ps1 to stage.
+            var appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+            Icon = appIcon;
+
             _tray = new NotifyIcon
             {
-                Icon = SystemIcons.Application, // swap for lzhwctrl.ico if you embed it as a resource
+                Icon = appIcon,
                 Visible = true,
                 Text = "lzhwctrl",
                 ContextMenuStrip = BuildTrayMenu(),
@@ -107,7 +122,13 @@ namespace LzHwCtrl
 
         private FlowLayoutPanel BuildButtonRow<T>(string title, (string label, T value)[] options, Action<T> onClick)
         {
-            var panel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var panel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false, // keep all buttons in this row on one line
+            };
             panel.Controls.Add(new Label { Text = title, AutoSize = true, Width = 80 });
             foreach (var (label, value) in options)
             {
@@ -120,7 +141,13 @@ namespace LzHwCtrl
 
         private FlowLayoutPanel BuildKbRow()
         {
-            var panel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            var panel = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+            };
             panel.Controls.Add(new Label { Text = "KEYBOARD", AutoSize = true, Width = 80 });
             string[] labels = { "Off", "1", "2", "3", "4", "5" };
             for (int i = 0; i < labels.Length; i++)
