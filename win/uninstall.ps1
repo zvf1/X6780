@@ -10,7 +10,14 @@
 function Info { param($msg) Write-Host "[*] $msg" -ForegroundColor Green }
 function Warn { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Ok   { param($msg) Write-Host "[OK] $msg" -ForegroundColor Green }
-function Die  { param($msg) Write-Host "[X] $msg" -ForegroundColor Red; exit 1 }
+function Die  {
+    param($msg)
+    Write-Host "[X] $msg" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "(press Enter to close this window)"
+    Read-Host | Out-Null
+    exit 1
+}
 
 $InstallDir = "$env:ProgramFiles\LzHwCtrl"
 $TaskName   = "LzHwCtrl"
@@ -18,6 +25,8 @@ $TaskName   = "LzHwCtrl"
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) { Die "Run this from an elevated PowerShell (Run as Administrator)." }
+
+try {
 
 Write-Host ""
 Write-Host "  lzhwctrl - uninstaller"
@@ -62,3 +71,15 @@ Write-Host ""
 Write-Host "  To reinstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex"
 Write-Host ""
+
+} catch {
+    Write-Host ""
+    Write-Host "[X] Unexpected error: $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+        Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "(press Enter to close this window)"
+    Read-Host | Out-Null
+    exit 1
+}
