@@ -9,11 +9,11 @@ Fan speed, CPU frequency, and keyboard backlight control for the Clevo P65/P67RG
 **Linux Mint / Ubuntu-based**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh | bash
-
+```
 Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/updater)
+```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintoptional.sh | bash
 ```
-
 **Arch / EndeavourOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
