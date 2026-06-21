@@ -44,7 +44,7 @@ info "Updating apt package lists..."
 sudo apt-get update -qq
 
 info "Installing apt dependencies..."
-DEPS=(git build-essential "linux-headers-$(uname -r)" python3 python3-pip python3-tk python3-pil)
+DEPS=(git build-essential "linux-headers-$(uname -r)" python3 python3-pip python3-tk python3-pil linux-tools-common "linux-tools-$(uname -r)")
 sudo apt-get install -y "${DEPS[@]}"
 
 # lzhwctrl.py is invoked by `sudo` directly via its own
