@@ -1,6 +1,9 @@
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
 ```
+```powershell
+irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
+```
 
 # lzhwctrl for Windows 10 x64
 
