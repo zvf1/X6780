@@ -72,7 +72,7 @@ namespace LzHwCtrl
             result = 0;
             try
             {
-                using var scope = new ManagementScope(@"root\WMI");
+                var scope = new ManagementScope(@"root\WMI");
                 scope.Connect();
 
                 var classQuery = new ManagementClass(scope, new ManagementPath("meta_class"), null);
