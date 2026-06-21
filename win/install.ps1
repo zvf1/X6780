@@ -24,7 +24,14 @@
 function Info { param($msg) Write-Host "[*] $msg" -ForegroundColor Green }
 function Warn { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Ok   { param($msg) Write-Host "[OK] $msg" -ForegroundColor Green }
-function Die  { param($msg) Write-Host "[X] $msg" -ForegroundColor Red; exit 1 }
+function Die  {
+    param($msg)
+    Write-Host "[X] $msg" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "(press Enter to close this window)"
+    Read-Host | Out-Null
+    exit 1
+}
 
 # ---- Constants ----
 $RepoZip    = "https://github.com/zvf1/X6780/archive/refs/heads/main.zip"
@@ -34,14 +41,16 @@ $TaskName   = "LzHwCtrl"
 $WorkDir    = "$env:TEMP\X6780-build"
 
 # NOTE: this assumes the repo layout under win/ is:
-#   win/LzHwCtrl/*.cs, LzHwCtrl.csproj, app.manifest
+#   win/*.cs, LzHwCtrl.csproj, app.manifest
 #   win/inpoutx64.dll
 #   win/LibreHardwareMonitor/*.dll
 # If you've reorganised the repo since this script was written, adjust
 # $ProjectSubdir / $DllSrc / $LhmSrc below to match.
-$ProjectSubdir = "win\LzHwCtrl"
+$ProjectSubdir = "win"
 $DllSrc        = "win\inpoutx64.dll"
 $LhmSrc        = "win\LibreHardwareMonitor"
+
+try {
 
 # ---- Sanity checks ----
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -181,3 +190,15 @@ Write-Host ""
 Write-Host "  To uninstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex"
 Write-Host ""
+
+} catch {
+    Write-Host ""
+    Write-Host "[X] Unexpected error: $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+        Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "(press Enter to close this window)"
+    Read-Host | Out-Null
+    exit 1
+}
