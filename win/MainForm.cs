@@ -11,7 +11,7 @@ namespace LzHwCtrl
         private readonly NotifyIcon _tray;
         private readonly Label _cpuTempLbl = new() { AutoSize = true };
         private readonly Label _gpuTempLbl = new() { AutoSize = true };
-        private readonly Label _statusLbl = new() { AutoSize = true, Dock = DockStyle.Bottom };
+        private readonly Label _statusLbl  = new() { AutoSize = true, Dock = DockStyle.Bottom };
 
         // (label, duty) -- same scale as FAN_BUTTONS in lzhwctrl.py
         private static readonly (string label, byte? duty)[] FanButtons =
@@ -27,6 +27,12 @@ namespace LzHwCtrl
             ("AUTO", null), ("60%", 60), ("70%", 70), ("80%", 80), ("90%", 90),
         };
 
+        // Highlight colour used for the active button in each row.
+        private static readonly Color ActiveColor   = Color.FromArgb(0, 120, 215); // Windows-blue
+        private static readonly Color InactiveColor = SystemColors.Control;
+        private static readonly Color ActiveText    = Color.White;
+        private static readonly Color InactiveText  = SystemColors.ControlText;
+
         public MainForm()
         {
             EcPort.EnsureDriverLoaded();
@@ -34,56 +40,68 @@ namespace LzHwCtrl
             _loop = new ControlLoop(_sensors);
             _loop.Start();
 
-            Text = "lzhwctrl";
-            Width = 600;
-            Height = 480;
+            Text            = "lzhwctrl";
             FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            AutoScroll = true; // safety net if a future row ever doesn't fit
+            MaximizeBox     = false;
+            AutoScroll      = false;
 
-            var layout = new FlowLayoutPanel
+            // ── Outer layout ────────────────────────────────────────────────
+            // A TableLayoutPanel gives each row its own horizontal band so
+            // nothing can overlap or overflow, and AutoSize on the form means
+            // the window grows to fit whatever the DPI/font scaling demands.
+            var table = new TableLayoutPanel
             {
-                Dock = DockStyle.Top,
-                FlowDirection = FlowDirection.TopDown,
-                AutoSize = true,
+                Dock        = DockStyle.Top,
+                AutoSize    = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                WrapContents = false, // rows stack vertically, never spill into a 2nd column
-                Padding = new Padding(10),
+                ColumnCount = 1,
+                Padding     = new Padding(12, 10, 12, 8),
             };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            layout.Controls.Add(new Label { Text = "CPU temp:", AutoSize = true });
-            layout.Controls.Add(_cpuTempLbl);
-            layout.Controls.Add(new Label { Text = "GPU temp:", AutoSize = true });
-            layout.Controls.Add(_gpuTempLbl);
+            // Temp labels
+            var tempPanel = new FlowLayoutPanel
+            {
+                AutoSize      = true,
+                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents  = false,
+                Margin        = new Padding(0, 0, 0, 6),
+            };
+            tempPanel.Controls.Add(new Label { Text = "CPU temp:", AutoSize = true, Margin = new Padding(0,3,4,0) });
+            tempPanel.Controls.Add(_cpuTempLbl);
+            tempPanel.Controls.Add(new Label { Text = "GPU temp:", AutoSize = true, Margin = new Padding(12,3,4,0) });
+            tempPanel.Controls.Add(_gpuTempLbl);
+            table.Controls.Add(tempPanel);
 
-            layout.Controls.Add(BuildButtonRow("CPU FAN", FanButtons, duty => _loop.CpuOverride = duty));
-            layout.Controls.Add(BuildButtonRow("GPU FAN", FanButtons, duty => _loop.GpuOverride = duty));
-            layout.Controls.Add(BuildButtonRow("CPU FREQ", FreqButtons, pct => CpuFreq.SetMaxPercent(pct)));
-            layout.Controls.Add(BuildKbRow());
+            // Button rows — each returns a panel; index 0 in each group is
+            // highlighted immediately so the user sees the current mode.
+            table.Controls.Add(BuildButtonRow("CPU FAN",  FanButtons,  duty => _loop.CpuOverride = duty,  initialIndex: 0));
+            table.Controls.Add(BuildButtonRow("GPU FAN",  FanButtons,  duty => _loop.GpuOverride = duty,  initialIndex: 0));
+            table.Controls.Add(BuildButtonRow("CPU FREQ", FreqButtons, pct  => CpuFreq.SetMaxPercent(pct), initialIndex: 0));
+            table.Controls.Add(BuildKbRow(initialIndex: 0));
 
-            Controls.Add(layout);
+            Controls.Add(table);
             Controls.Add(_statusLbl);
 
-            // lzhwctrl.ico is embedded into the exe via <ApplicationIcon> in the
-            // csproj, so pull it back out at runtime instead of hardcoding a
-            // separate file path -- one less thing for install.ps1 to stage.
+            // Resize form to fit content after layout is done.
+            AutoSize     = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+
             var appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             Icon = appIcon;
 
             _tray = new NotifyIcon
             {
-                Icon = appIcon,
-                Visible = true,
-                Text = "lzhwctrl",
+                Icon             = appIcon,
+                Visible          = true,
+                Text             = "lzhwctrl",
                 ContextMenuStrip = BuildTrayMenu(),
             };
             _tray.DoubleClick += (_, __) => ShowFromTray();
 
             FormClosing += (_, e) =>
             {
-                // Mirror the Python tray's "Exit" item: minimize-to-tray on the
-                // X button, only truly exit via the tray menu, so the reset-to-
-                // auto sequence in ControlLoop.Stop() doesn't fire on a stray click.
                 if (e.CloseReason == CloseReason.UserClosing && !_exiting)
                 {
                     e.Cancel = true;
@@ -106,7 +124,7 @@ namespace LzHwCtrl
             menu.Items.Add("Exit", null, (_, __) =>
             {
                 _exiting = true;
-                _loop.Stop(); // resets EC to auto control before quitting
+                _loop.Stop();
                 _tray.Visible = false;
                 Close();
             });
@@ -120,43 +138,144 @@ namespace LzHwCtrl
             Activate();
         }
 
-        private FlowLayoutPanel BuildButtonRow<T>(string title, (string label, T value)[] options, Action<T> onClick)
+        /// <summary>
+        /// Builds a labelled row of buttons where exactly one button is
+        /// highlighted at a time (the active selection).
+        /// </summary>
+        private FlowLayoutPanel BuildButtonRow<T>(
+            string title,
+            (string label, T value)[] options,
+            Action<T> onClick,
+            int initialIndex = 0)
         {
             var panel = new FlowLayoutPanel
             {
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                AutoSize      = true,
+                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false, // keep all buttons in this row on one line
+                WrapContents  = false,
+                Margin        = new Padding(0, 2, 0, 2),
             };
-            panel.Controls.Add(new Label { Text = title, AutoSize = true, Width = 80 });
-            foreach (var (label, value) in options)
+
+            // Fixed-width label so all button groups line up.
+            panel.Controls.Add(new Label
             {
-                var btn = new Button { Text = label, AutoSize = true };
-                btn.Click += (_, __) => onClick(value);
+                Text      = title,
+                AutoSize  = false,
+                Width     = 72,
+                TextAlign = ContentAlignment.MiddleRight,
+                Margin    = new Padding(0, 6, 6, 0),
+            });
+
+            var buttons = new Button[options.Length];
+
+            void SetActive(int activeIdx)
+            {
+                for (int j = 0; j < buttons.Length; j++)
+                {
+                    buttons[j].BackColor = (j == activeIdx) ? ActiveColor   : InactiveColor;
+                    buttons[j].ForeColor = (j == activeIdx) ? ActiveText    : InactiveText;
+                    buttons[j].FlatStyle = FlatStyle.Flat;
+                    buttons[j].FlatAppearance.BorderColor =
+                        (j == activeIdx) ? Color.FromArgb(0, 84, 153) : SystemColors.ControlDark;
+                }
+            }
+
+            for (int i = 0; i < options.Length; i++)
+            {
+                int idx = i;
+                var (label, value) = options[i];
+
+                var btn = new Button
+                {
+                    Text      = label,
+                    AutoSize  = false,
+                    Width     = 58,
+                    Height    = 28,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin    = new Padding(2),
+                };
+                btn.Click += (_, __) =>
+                {
+                    onClick(value);
+                    SetActive(idx);
+                };
+                buttons[i] = btn;
                 panel.Controls.Add(btn);
             }
+
+            SetActive(initialIndex);
             return panel;
         }
 
-        private FlowLayoutPanel BuildKbRow()
+        /// <summary>
+        /// Keyboard backlight row — Off + levels 1–5.
+        /// </summary>
+        private FlowLayoutPanel BuildKbRow(int initialIndex = 0)
         {
             var panel = new FlowLayoutPanel
             {
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                AutoSize      = true,
+                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
+                WrapContents  = false,
+                Margin        = new Padding(0, 2, 0, 2),
             };
-            panel.Controls.Add(new Label { Text = "KEYBOARD", AutoSize = true, Width = 80 });
+
+            panel.Controls.Add(new Label
+            {
+                Text      = "KEYBOARD",
+                AutoSize  = false,
+                Width     = 72,
+                TextAlign = ContentAlignment.MiddleRight,
+                Margin    = new Padding(0, 6, 6, 0),
+            });
+
             string[] labels = { "Off", "1", "2", "3", "4", "5" };
+            var buttons     = new Button[labels.Length];
+
+            void SetActive(int activeIdx)
+            {
+                for (int j = 0; j < buttons.Length; j++)
+                {
+                    buttons[j].BackColor = (j == activeIdx) ? ActiveColor   : InactiveColor;
+                    buttons[j].ForeColor = (j == activeIdx) ? ActiveText    : InactiveText;
+                    buttons[j].FlatStyle = FlatStyle.Flat;
+                    buttons[j].FlatAppearance.BorderColor =
+                        (j == activeIdx) ? Color.FromArgb(0, 84, 153) : SystemColors.ControlDark;
+                }
+            }
+
             for (int i = 0; i < labels.Length; i++)
             {
                 int level = i;
-                var btn = new Button { Text = labels[i], AutoSize = true };
-                btn.Click += (_, __) => Keyboard.SetLevel(level);
+                var btn = new Button
+                {
+                    Text      = labels[i],
+                    AutoSize  = false,
+                    Width     = 58,
+                    Height    = 28,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin    = new Padding(2),
+                };
+                btn.Click += (_, __) =>
+                {
+                    bool ok = Keyboard.SetLevel(level);
+                    if (ok) SetActive(level);
+                    // If the WMI call fails, don't move the highlight so the
+                    // user can see that the selection didn't take effect.
+                };
+                buttons[i] = btn;
                 panel.Controls.Add(btn);
             }
+
+            // Try to read the current keyboard level from the EC so the
+            // initial highlight reflects the real hardware state.
+            if (Keyboard.TryGetLevel(out int currentLevel))
+                SetActive(currentLevel);
+            else
+                SetActive(initialIndex);
+
             return panel;
         }
 
@@ -164,7 +283,7 @@ namespace LzHwCtrl
         {
             _cpuTempLbl.Text = $"{_loop.CpuTemp:0}C";
             _gpuTempLbl.Text = $"{_loop.GpuTemp:0}C";
-            _statusLbl.Text = $"cpu duty 0x{_loop.CpuDuty:X2}  gpu duty 0x{_loop.GpuDuty:X2}";
+            _statusLbl.Text  = $"cpu duty 0x{_loop.CpuDuty:X2}  gpu duty 0x{_loop.GpuDuty:X2}";
         }
     }
 
