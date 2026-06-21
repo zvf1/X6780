@@ -25,7 +25,7 @@
 
 set -uo pipefail
 
-RAW_BASE="https://raw.githubusercontent.com/zvf1/X6780/refs/heads/main/mint"
+RAW_BASE="https://raw.githubusercontent.com/zvf1/X6780/main/mint"
 UNDERVOLT_REPO="https://github.com/kitsunyan/intel-undervolt.git"
 SCRIPT_PATH="/usr/local/sbin/mintoptional.sh"
 SERVICE_PATH="/etc/systemd/system/mintoptional.service"
