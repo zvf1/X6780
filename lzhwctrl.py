@@ -33,25 +33,25 @@ ONE-TIME SETUP
    fully gone.)
 
 2. Put this file somewhere stable and make it executable:
-       sudo install -Dm755 clevo_fancontrol.py /opt/clevo-fancontrol/fancontrol.py
+       sudo install -Dm755 lzhwctrl.py /opt/clevo-fancontrol/lzhwctrl.py
 
 3. Add a sudoers rule scoped *only* to this exact file and the
    --ec-helper flag (replace `yourusername`):
-       echo 'yourusername ALL=(root) NOPASSWD: /opt/clevo-fancontrol/fancontrol.py --ec-helper *' \
+       echo 'yourusername ALL=(root) NOPASSWD: /opt/clevo-fancontrol/lzhwctrl.py --ec-helper *' \
          | sudo tee /etc/sudoers.d/clevo-fancontrol
        sudo chmod 0440 /etc/sudoers.d/clevo-fancontrol
        sudo visudo -c
 
 4. Test the privileged path manually before trusting the GUI:
-       sudo -n /opt/clevo-fancontrol/fancontrol.py --ec-helper set 1 128
-       sudo -n /opt/clevo-fancontrol/fancontrol.py --ec-helper reset
+       sudo -n /opt/clevo-fancontrol/lzhwctrl.py --ec-helper set 1 128
+       sudo -n /opt/clevo-fancontrol/lzhwctrl.py --ec-helper reset
 
 5. Autostart the GUI in your session (XDG autostart), e.g.
    ~/.config/autostart/clevo-fancontrol.desktop:
        [Desktop Entry]
        Type=Application
-       Exec=/opt/clevo-fancontrol/fancontrol.py
-       Name=Clevo Fan Control
+       Exec=/opt/clevo-fancontrol/lzhwctrl.py
+       Name=lzhwctrl
 """
 
 import os
@@ -70,7 +70,7 @@ except Exception:
 
 # ---- CONFIGURATION ----
 script_dir = os.path.dirname(os.path.abspath(__file__))
-ICON_PATH = os.path.join(script_dir, "lz4fancontrol.ico")
+ICON_PATH = os.path.join(script_dir, "lzhwctrl.ico")
 
 # Temperature (C) -> fan duty (0x00-0xFF). Carried over from the
 # Windows version, unchanged — the EC protocol and duty scale are
@@ -391,7 +391,7 @@ def build_window():
     BAR_BG  = "#333333"
 
     window_root = tk.Tk()
-    window_root.title("lz4 Fan Control")
+    window_root.title("lzhwctrl")
     window_root.resizable(False, False)
     window_root.configure(bg=BG)
 
@@ -660,7 +660,7 @@ def main():
         pystray.MenuItem("Exit", on_exit),
     )
 
-    icon = pystray.Icon("lz4fancontrol", icon_image, "lz4 Fan Control", menu)
+    icon = pystray.Icon("lzhwctrl", icon_image, "lzhwctrl", menu)
     icon.run()
 
     # Make sure the reset-to-auto sequence actually completes before
