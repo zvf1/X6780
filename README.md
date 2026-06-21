@@ -12,6 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh
 
 Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/updater)
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintoptional.sh | bash```
+```
 
 **Arch / EndeavourOS**
 ```bash
