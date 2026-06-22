@@ -79,7 +79,7 @@ namespace LzHwCtrl
             table.Controls.Add(BuildButtonRow("CPU FAN",  FanButtons,  duty => _loop.CpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("GPU FAN",  FanButtons,  duty => _loop.GpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("CPU FREQ", FreqButtons, pct  => CpuFreq.SetMaxPercent(pct), initialIndex: 0));
-            table.Controls.Add(BuildKbRow(initialIndex: 0));
+            table.Controls.Add(BuildKbUnsupportedRow());
 
             Controls.Add(table);
             Controls.Add(_statusLbl);
@@ -205,9 +205,10 @@ namespace LzHwCtrl
         }
 
         /// <summary>
-        /// Keyboard backlight row — Off + levels 1–5.
+        /// Keyboard backlight row — shown as disabled with an explanation,
+        /// because the underlying ACPI method requires a kernel driver on Windows.
         /// </summary>
-        private FlowLayoutPanel BuildKbRow(int initialIndex = 0)
+        private FlowLayoutPanel BuildKbUnsupportedRow()
         {
             var panel = new FlowLayoutPanel
             {
@@ -227,55 +228,14 @@ namespace LzHwCtrl
                 Margin    = new Padding(0, 6, 6, 0),
             });
 
-            string[] labels = { "Off", "1", "2", "3", "4", "5" };
-            var buttons     = new Button[labels.Length];
-
-            void SetActive(int activeIdx)
+            panel.Controls.Add(new Label
             {
-                for (int j = 0; j < buttons.Length; j++)
-                {
-                    buttons[j].BackColor = (j == activeIdx) ? ActiveColor   : InactiveColor;
-                    buttons[j].ForeColor = (j == activeIdx) ? ActiveText    : InactiveText;
-                    buttons[j].FlatStyle = FlatStyle.Flat;
-                    buttons[j].FlatAppearance.BorderColor =
-                        (j == activeIdx) ? Color.FromArgb(0, 84, 153) : SystemColors.ControlDark;
-                }
-            }
-
-            for (int i = 0; i < labels.Length; i++)
-            {
-                int level = i;
-                var btn = new Button
-                {
-                    Text      = labels[i],
-                    AutoSize  = false,
-                    Width     = 58,
-                    Height    = 28,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin    = new Padding(2),
-                };
-                btn.Click += (_, __) =>
-                {
-                    bool ok = Keyboard.SetLevel(level);
-                    if (ok) SetActive(level);
-                    // If the WMI call fails, don't move the highlight so the
-                    // user can see that the selection didn't take effect.
-                };
-                buttons[i] = btn;
-                panel.Controls.Add(btn);
-            }
-
-            // Try to read the current keyboard level so the initial highlight
-            // reflects the real hardware state. Wrapped in try/catch so any
-            // failure here never prevents the window from opening.
-            try
-            {
-                if (Keyboard.TryGetLevel(out int currentLevel))
-                    SetActive(currentLevel);
-                else
-                    SetActive(initialIndex);
-            }
-            catch { SetActive(initialIndex); }
+                Text      = "Not available on Windows (requires kernel driver)",
+                AutoSize  = true,
+                ForeColor = SystemColors.GrayText,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin    = new Padding(2, 8, 0, 0),
+            });
 
             return panel;
         }
