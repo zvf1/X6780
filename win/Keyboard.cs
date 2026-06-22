@@ -112,9 +112,7 @@ namespace LzHwCtrl
         // Method names to try under each device
         private static readonly string[] MethodNames = { "WMAB", "WMAD", "WMA0", "WMBC" };
 
-        // EC register used on some Clevo boards for keyboard brightness
-        // (observed in tuxedo_io source as CLEVO_ACPI_OB_B2 -> EC reg 0xD3)
-        private const byte EcKbRegister = 0xD3;
+
 
         private static readonly string LogPath = Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "keyboard_debug.log");
@@ -144,14 +142,6 @@ namespace LzHwCtrl
                     }
                 }
                 finally { CloseHandle(h); }
-            }
-
-            // Fallback: write EC register directly (same path as fan control)
-            Log("  Falling back to EC register write");
-            if (TryEcWrite(EcKbRegister, (byte)level))
-            {
-                Log("  EC write succeeded");
-                return true;
             }
 
             Log("  All methods failed");
@@ -284,28 +274,6 @@ namespace LzHwCtrl
             catch (Exception ex)
             {
                 Log($"    Exception: {ex.Message}");
-                return false;
-            }
-        }
-
-        // ── EC fallback ─────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Writes a value directly to an EC register using the same
-        /// EcPort mechanism that fan control uses. Some Clevo boards
-        /// expose keyboard brightness at EC register 0xD3.
-        /// </summary>
-        private static bool TryEcWrite(byte reg, byte value)
-        {
-            try
-            {
-                var ec = new EcPort();
-                try   { ec.WriteByte(reg, value); return true; }
-                finally { ec.Close(); }
-            }
-            catch (Exception ex)
-            {
-                Log($"  EC write failed: {ex.Message}");
                 return false;
             }
         }
