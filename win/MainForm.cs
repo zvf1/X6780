@@ -265,12 +265,17 @@ namespace LzHwCtrl
                 panel.Controls.Add(btn);
             }
 
-            // Try to read the current keyboard level from the EC so the
-            // initial highlight reflects the real hardware state.
-            if (Keyboard.TryGetLevel(out int currentLevel))
-                SetActive(currentLevel);
-            else
-                SetActive(initialIndex);
+            // Try to read the current keyboard level so the initial highlight
+            // reflects the real hardware state. Wrapped in try/catch so any
+            // failure here never prevents the window from opening.
+            try
+            {
+                if (Keyboard.TryGetLevel(out int currentLevel))
+                    SetActive(currentLevel);
+                else
+                    SetActive(initialIndex);
+            }
+            catch { SetActive(initialIndex); }
 
             return panel;
         }
