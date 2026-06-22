@@ -1,208 +1,285 @@
 using System;
-using System.Management;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 
 namespace LzHwCtrl
 {
     /// <summary>
-    /// Replaces set_kb_level() from lzhwctrl.py.
+    /// Controls the white-only keyboard backlight on this Clevo board.
     ///
-    /// Good news from reading tuxedo-drivers' clevo_leds.h / clevo_wmi.c:
-    /// the white-only keyboard backlight on this board is NOT an EC port
-    /// write like the fans are. It's an ACPI WMI control-method call:
+    /// BACKGROUND
+    /// ----------
+    /// On Linux, tuxedo-drivers' clevo_wmi.c exposes the backlight as
+    /// /sys/class/leds/white:kbd_backlight. It works by calling Linux's
+    /// wmi_evaluate_method() against GUID ABBC0F6D-8EA1-11D1-00A0-C90629100000
+    /// (CLEVO_WMI_METHOD_GUID) with method_id = 0x27 (set brightness).
     ///
-    ///   clevo_wmi_evaluate(CLEVO_CMD_SET_KB_WHITE_LEDS /* 0x27 */, brightness)
-    ///   -> wmi_evaluate_method(CLEVO_WMI_METHOD_GUID, 0, 0x27, &arg, &out)
+    /// On Windows, wmiacpi.sys only generates a WMI class for a GUID if the
+    /// BIOS _WDG table includes a "method" entry for it. This board's BIOS
+    /// does NOT do that — so the GUID never appears in root\WMI and the
+    /// WMI approach is a dead end.
     ///
-    /// where CLEVO_WMI_METHOD_GUID = ABBC0F6D-8EA1-11D1-00A0-C90629100000,
-    /// a long-standing Clevo/Wistron WMI GUID used across many of their
-    /// laptops. Windows' own ACPI/WMI mapper (wmiacpi.sys) reads the exact
-    /// same firmware _WDG table and generates a WMI class for this GUID
-    /// under root\WMI -- this is the same mechanism, not an emulation of
-    /// it, so no kernel driver or admin rights are needed for this part.
+    /// HOW THIS WORKS
+    /// --------------
+    /// wmi_evaluate_method() in the Linux kernel is ultimately just a thin
+    /// wrapper around an ACPI control method call. The Windows ACPI driver
+    /// (acpi.sys) exposes the same ACPI namespace and accepts method
+    /// evaluation requests via DeviceIoControl with IOCTL_ACPI_EVAL_METHOD.
     ///
-    /// Run discover-clevo-wmi.ps1 first to see the discovered class/method
-    /// names on your actual hardware and sanity-check this against it.
+    /// The call chain mirrors what clevo_wmi.c does:
+    ///   clevo_wmi_evaluate(0x27, brightness)
+    ///   -> evaluate ACPI method \WMAB (or \WMAD / similar) with:
+    ///        MethodId = 0x27
+    ///        Arg0     = brightness (0–5)
+    ///
+    /// The WMI-to-ACPI bridge on most Clevo boards maps to a method named
+    /// WMAx in the ACPI namespace. The conventional names used by wmiacpi.sys
+    /// are WMAB (for the method GUID ABBC0F6D) and WMAD. We try both.
+    ///
+    /// If neither works on your board, run:
+    ///   powershell -c "& { [System.IO.File]::WriteAllBytes('dsdt.bin',
+    ///     (Get-WmiObject -Namespace root\wmi -Class MSAcpi_RawSMBiosTables
+    ///     | Select -First 1).SMBiosData) }" 
+    /// (or use RWEverything / acpidump) and decompile the DSDT to find the
+    /// real method name for GUID ABBC0F6D.
     /// </summary>
     internal static class Keyboard
     {
-        // Stored both with and without braces because WMI returns the GUID
-        // qualifier in either form depending on the BIOS/Windows version.
-        private const string ClevoWmiMethodGuidNoBraces = "ABBC0F6D-8EA1-11D1-00A0-C90629100000";
-        private const string ClevoWmiMethodGuidBraces   = "{ABBC0F6D-8EA1-11D1-00A0-C90629100000}";
+        // ACPI IOCTL to evaluate a method by path under a device
+        // (from ntifs.h / acpiioct.h)
+        private const uint IOCTL_ACPI_EVAL_METHOD        = 0x00224010;
+        private const uint IOCTL_ACPI_EVAL_METHOD_EX     = 0x00224018;
 
-        private const byte CmdSetKbWhiteLeds = 0x27;
-        private const byte CmdGetKbWhiteLeds = 0x3D;
+        // ACPI_EVAL_INPUT_BUFFER.Signature values
+        private const uint ACPI_EVAL_INPUT_BUFFER_SIGNATURE       = 0x44494e49; // 'INDI'
+        private const uint ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER_SIGNATURE = 0x01aa0001;
 
-        // Same 0-5 UI scale as the Linux script's button row, scaled down to
-        // the white-only keyboard's actual range. clevo_leds.h shows white-only
-        // boards are either 3-step (CLEVO_KBD_BRIGHTNESS_WHITE_MAX = 0x02:
-        // off/half/full) or 6-step on older "<=7th gen" boards
-        // (CLEVO_KBD_BRIGHTNESS_WHITE_MAX_5 = 0x05). The i7-6700HQ in this
-        // laptop is 6th gen, so it's almost certainly the 6-step variant --
-        // which conveniently maps 1:1 onto the existing 0-5 buttons with no
-        // scaling needed. If brightness looks wrong (e.g. only 3 useful
-        // steps), this board is the 3-step variant -- divide level by 2.5ish.
+        // Clevo WMI method command IDs (from clevo_wmi.c)
+        private const uint CmdSetKbWhiteLeds = 0x27;
+        private const uint CmdGetKbWhiteLeds = 0x3D;
+
+        // ACPI method names the WMI mapper uses for GUID ABBC0F6D.
+        // Try WMAB first (most Clevos), then WMAD as a fallback.
+        private static readonly string[] AcpiMethodNames = { "WMAB", "WMAD", "WMA0" };
+
+        // Path to the ACPI WMI device that owns the Clevo namespace.
+        // On most systems this is the first ACPI device under PNP0C14.
+        private const string AcpiDevicePath = @"\\.\ACPI#PNP0C14#0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}";
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr CreateFile(
+            string lpFileName,
+            uint   dwDesiredAccess,
+            uint   dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint   dwCreationDisposition,
+            uint   dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeviceIoControl(
+            IntPtr  hDevice,
+            uint    dwIoControlCode,
+            byte[]  lpInBuffer,
+            uint    nInBufferSize,
+            byte[]  lpOutBuffer,
+            uint    nOutBufferSize,
+            out uint lpBytesReturned,
+            IntPtr  lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+        private const uint GENERIC_READ_WRITE  = 0xC0000000;
+        private const uint FILE_SHARE_READ_WRITE = 0x00000003;
+        private const uint OPEN_EXISTING      = 3;
+
         public static bool SetLevel(int level)
         {
             level = Math.Max(0, Math.Min(5, level));
-            return InvokeClevoMethod(CmdSetKbWhiteLeds, (uint)level, out _);
+            return InvokeAcpiMethod(CmdSetKbWhiteLeds, (uint)level, out _);
         }
 
         public static bool TryGetLevel(out int level)
         {
             level = 0;
-            if (!InvokeClevoMethod(CmdGetKbWhiteLeds, 0, out uint result))
+            if (!InvokeAcpiMethod(CmdGetKbWhiteLeds, 0, out uint result))
                 return false;
-            level = (int)result;
+            level = (int)(result & 0xFF);
             return true;
         }
 
         /// <summary>
-        /// Returns true if <paramref name="raw"/> matches the Clevo WMI method
-        /// GUID, regardless of whether WMI returned it with or without braces
-        /// and regardless of case.
+        /// Calls the ACPI WMI method by opening the PNP0C14 device and
+        /// sending IOCTL_ACPI_EVAL_METHOD_EX with the method path and args.
+        ///
+        /// The input buffer layout is:
+        ///   ACPI_EVAL_INPUT_BUFFER_EX:
+        ///     ULONG  Signature   = ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX
+        ///     CHAR   MethodName[256]   (null-terminated, relative path)
+        ///     ULONG  ArgumentCount = 2
+        ///     ACPI_METHOD_ARGUMENT[2]:
+        ///       [0] Type=INTEGER, DataLength=4, Data=MethodId (0x27 etc.)
+        ///       [1] Type=INTEGER, DataLength=4, Data=arg
+        ///
+        /// The method path under the WMI device is "\WMAB" etc.
         /// </summary>
-        private static bool IsClevoGuid(string raw)
+        private static bool InvokeAcpiMethod(uint methodId, uint arg, out uint result)
         {
-            if (raw == null) return false;
-            var s = raw.Trim();
-            return string.Equals(s, ClevoWmiMethodGuidNoBraces, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(s, ClevoWmiMethodGuidBraces,   StringComparison.OrdinalIgnoreCase);
+            result = 0;
+
+            // Try the WMI device path for PNP0C14 instance 0, then instance
+            // CLVD (some Clevo BIOSes use that identifier).
+            string[] devicePaths =
+            {
+                @"\\.\ACPI#PNP0C14#0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
+                @"\\.\ACPI#PNP0C14#clvd#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
+                @"\\.\ACPI#PNP0C14#wmi0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
+            };
+
+            foreach (string devPath in devicePaths)
+            {
+                IntPtr hDev = CreateFile(devPath, GENERIC_READ_WRITE,
+                    FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+
+                if (hDev == INVALID_HANDLE_VALUE)
+                    continue;
+
+                try
+                {
+                    foreach (string methodName in AcpiMethodNames)
+                    {
+                        if (TryEvalMethod(hDev, methodName, methodId, arg, out result))
+                            return true;
+                    }
+                }
+                finally
+                {
+                    CloseHandle(hDev);
+                }
+            }
+
+            // Last resort: try the direct ACPI namespace path via the ACPI
+            // driver itself (requires no device enumeration).
+            return TryDirectAcpiPath(methodId, arg, out result);
         }
 
-        /// <summary>
-        /// Finds the WMI class Windows generated for CLEVO_WMI_METHOD_GUID,
-        /// then finds the method whose WmiMethodId qualifier matches `cmd`
-        /// (the ACPI/WMI mapper preserves the firmware's method IDs exactly,
-        /// so this is the same 0x27/0x3D values clevo_wmi.c uses -- not a
-        /// re-numbering), and invokes it.
-        ///
-        /// FIX: The original code compared the GUID string including literal
-        /// curly braces against the WMI qualifier value, which on many boards
-        /// is returned WITHOUT braces -- causing every keyboard button click
-        /// to silently do nothing. IsClevoGuid() now accepts both forms.
-        ///
-        /// FIX: WmiMethodId is stored as an integer qualifier by wmiacpi.sys,
-        /// not a string, so byte.TryParse() always failed. Convert.ToByte()
-        /// handles both int and string qualifier values.
-        /// </summary>
-        private static bool InvokeClevoMethod(byte cmd, uint arg, out uint result)
+        private static bool TryEvalMethod(IntPtr hDev, string methodName,
+            uint methodId, uint arg, out uint result)
         {
             result = 0;
             try
             {
-                var scope = new ManagementScope(@"root\WMI");
-                scope.Connect();
+                // ACPI_EVAL_INPUT_BUFFER_EX layout (packed):
+                //   [0..3]    Signature (ULONG) = 0x45584950 ("PIXE")
+                //   [4..259]  MethodName (CHAR[256])
+                //   [260..263] ArgumentCount (ULONG) = 2
+                //   [264..275] Arg0: Type(2), DataLen(2), Data(4), padding(4)
+                //   [276..287] Arg1: Type(2), DataLen(2), Data(4), padding(4)
+                const uint SigEx = 0x45584950; // ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX
+                const ushort ArgTypeInteger = 0;
 
-                var classQuery = new ManagementClass(scope, new ManagementPath("meta_class"), null);
-                ManagementClass targetClass = null;
+                byte[] inBuf = new byte[288];
+                WriteUInt32(inBuf, 0, SigEx);
+                WriteAsciiZ(inBuf, 4, methodName, 256);
+                WriteUInt32(inBuf, 260, 2); // ArgumentCount
 
-                foreach (ManagementBaseObject c in classQuery.GetSubclasses())
+                // Arg0 = MethodId
+                WriteUInt16(inBuf, 264, ArgTypeInteger);
+                WriteUInt16(inBuf, 266, 4);
+                WriteUInt32(inBuf, 268, methodId);
+
+                // Arg1 = brightness/arg
+                WriteUInt16(inBuf, 276, ArgTypeInteger);
+                WriteUInt16(inBuf, 278, 4);
+                WriteUInt32(inBuf, 280, arg);
+
+                byte[] outBuf = new byte[256];
+                bool ok = DeviceIoControl(hDev, IOCTL_ACPI_EVAL_METHOD_EX,
+                    inBuf, (uint)inBuf.Length,
+                    outBuf, (uint)outBuf.Length,
+                    out uint bytesReturned, IntPtr.Zero);
+
+                if (ok && bytesReturned >= 8)
                 {
-                    using var mc = (ManagementClass)c;
-                    var guidVal = TryGetQualifierValue(mc.Qualifiers, "guid");
-                    if (IsClevoGuid(guidVal?.ToString()))
-                    {
-                        // Don't dispose mc yet -- we need it as targetClass.
-                        // Re-open a fresh instance so the using block above
-                        // doesn't close it out from under us.
-                        targetClass = new ManagementClass(scope,
-                            new ManagementPath(mc.ClassPath.ClassName), null);
-                        break;
-                    }
+                    // ACPI_EVAL_OUTPUT_BUFFER: Signature(4), Length(4), Count(4), Argument[0]
+                    result = ReadUInt32(outBuf, 16); // first return argument data
                 }
-
-                if (targetClass == null)
-                {
-                    Console.Error.WriteLine(
-                        "[kb] No WMI class found for Clevo method GUID. " +
-                        "Run discover-clevo-wmi.ps1 to check whether this " +
-                        "board exposes it under a different GUID.");
-                    return false;
-                }
-
-                using (targetClass)
-                {
-                    string targetMethodName = null;
-                    foreach (MethodData method in targetClass.Methods)
-                    {
-                        // WmiMethodId is registered as an integer qualifier by
-                        // wmiacpi.sys. Convert.ToByte handles int, uint, string, etc.
-                        var idVal = TryGetQualifierValue(method.Qualifiers, "WmiMethodId");
-                        if (idVal == null) continue;
-                        try
-                        {
-                            byte methodId = Convert.ToByte(idVal);
-                            if (methodId == cmd)
-                            {
-                                targetMethodName = method.Name;
-                                break;
-                            }
-                        }
-                        catch { /* qualifier exists but isn't a numeric type -- skip */ }
-                    }
-
-                    if (targetMethodName == null)
-                    {
-                        Console.Error.WriteLine(
-                            $"[kb] Found the Clevo WMI class ({targetClass.ClassPath.ClassName}) " +
-                            $"but no method with WmiMethodId 0x{cmd:X2}. Run discover-clevo-wmi.ps1 " +
-                            "to see what methods actually exist on this board.");
-                        return false;
-                    }
-
-                    using var searcher = new ManagementObjectSearcher(scope,
-                        new ObjectQuery($"SELECT * FROM {targetClass.ClassPath.ClassName}"));
-                    using var instanceEnum = searcher.Get().GetEnumerator();
-                    if (!instanceEnum.MoveNext())
-                    {
-                        Console.Error.WriteLine("[kb] Clevo WMI class has no instances.");
-                        return false;
-                    }
-
-                    using var instance = (ManagementObject)instanceEnum.Current;
-                    var inParams = targetClass.GetMethodParameters(targetMethodName);
-
-                    // Most BIOS-generated classes following the Microsoft sample
-                    // pattern name the single in-param "Data" (uint32). If this
-                    // board's BIOS named it differently, fall back to whatever
-                    // the single declared in-param actually is.
-                    string inParamName = "Data";
-                    foreach (PropertyData p in inParams.Properties)
-                    {
-                        inParamName = p.Name;
-                        break; // there's normally exactly one
-                    }
-                    inParams[inParamName] = arg;
-
-                    var outParams = instance.InvokeMethod(targetMethodName, inParams, null);
-
-                    if (outParams != null)
-                    {
-                        foreach (PropertyData p in outParams.Properties)
-                        {
-                            if (p.Value != null)
-                            {
-                                result = Convert.ToUInt32(p.Value);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                return true;
+                return ok;
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[kb] WMI call failed: {ex.Message}");
+                Console.Error.WriteLine($"[kb] TryEvalMethod({methodName}): {ex.Message}");
                 return false;
             }
         }
 
-        private static object TryGetQualifierValue(QualifierDataCollection qualifiers, string name)
+        /// <summary>
+        /// Fallback: open acpi.sys directly and call IOCTL_ACPI_EVAL_METHOD
+        /// (non-EX) using just the short method name. This works when the
+        /// device is accessible as \\.\ACPI but not via the PNP0C14 path.
+        /// </summary>
+        private static bool TryDirectAcpiPath(uint methodId, uint arg, out uint result)
         {
-            try { return qualifiers[name]?.Value; }
-            catch { return null; }
+            result = 0;
+            string[] directPaths =
+            {
+                @"\\.\ACPI",
+                @"\\.\acpi",
+            };
+
+            foreach (string path in directPaths)
+            {
+                IntPtr hDev = CreateFile(path, GENERIC_READ_WRITE,
+                    FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+                if (hDev == INVALID_HANDLE_VALUE)
+                    continue;
+                try
+                {
+                    foreach (string methodName in AcpiMethodNames)
+                    {
+                        if (TryEvalMethod(hDev, methodName, methodId, arg, out result))
+                            return true;
+                    }
+                }
+                finally { CloseHandle(hDev); }
+            }
+
+            Console.Error.WriteLine(
+                "[kb] Could not find the ACPI WMI device (PNP0C14) or invoke " +
+                "any known method name (WMAB/WMAD/WMA0). " +
+                "Run 'devmgmt.msc', expand 'System devices', and look for " +
+                "'Microsoft Windows Management Interface for ACPI'. " +
+                "If missing, this board may need a BIOS update or the Clevo " +
+                "Windows keyboard driver package.");
+            return false;
+        }
+
+        private static void WriteUInt32(byte[] buf, int offset, uint value)
+        {
+            buf[offset]     = (byte)(value);
+            buf[offset + 1] = (byte)(value >> 8);
+            buf[offset + 2] = (byte)(value >> 16);
+            buf[offset + 3] = (byte)(value >> 24);
+        }
+        private static void WriteUInt16(byte[] buf, int offset, ushort value)
+        {
+            buf[offset]     = (byte)(value);
+            buf[offset + 1] = (byte)(value >> 8);
+        }
+        private static uint ReadUInt32(byte[] buf, int offset) =>
+            (uint)(buf[offset] | (buf[offset+1] << 8) | (buf[offset+2] << 16) | (buf[offset+3] << 24));
+
+        private static void WriteAsciiZ(byte[] buf, int offset, string s, int maxLen)
+        {
+            int i = 0;
+            foreach (char c in s)
+            {
+                if (i >= maxLen - 1) break;
+                buf[offset + i++] = (byte)c;
+            }
+            buf[offset + i] = 0;
         }
     }
 }
