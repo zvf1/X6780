@@ -1,285 +1,300 @@
 using System;
-using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace LzHwCtrl
 {
     /// <summary>
-    /// Controls the white-only keyboard backlight on this Clevo board.
+    /// Controls the white keyboard backlight via the ACPI WMI bridge (PNP0C14).
     ///
-    /// BACKGROUND
-    /// ----------
-    /// On Linux, tuxedo-drivers' clevo_wmi.c exposes the backlight as
-    /// /sys/class/leds/white:kbd_backlight. It works by calling Linux's
-    /// wmi_evaluate_method() against GUID ABBC0F6D-8EA1-11D1-00A0-C90629100000
-    /// (CLEVO_WMI_METHOD_GUID) with method_id = 0x27 (set brightness).
-    ///
-    /// On Windows, wmiacpi.sys only generates a WMI class for a GUID if the
-    /// BIOS _WDG table includes a "method" entry for it. This board's BIOS
-    /// does NOT do that — so the GUID never appears in root\WMI and the
-    /// WMI approach is a dead end.
-    ///
-    /// HOW THIS WORKS
-    /// --------------
-    /// wmi_evaluate_method() in the Linux kernel is ultimately just a thin
-    /// wrapper around an ACPI control method call. The Windows ACPI driver
-    /// (acpi.sys) exposes the same ACPI namespace and accepts method
-    /// evaluation requests via DeviceIoControl with IOCTL_ACPI_EVAL_METHOD.
-    ///
-    /// The call chain mirrors what clevo_wmi.c does:
-    ///   clevo_wmi_evaluate(0x27, brightness)
-    ///   -> evaluate ACPI method \WMAB (or \WMAD / similar) with:
-    ///        MethodId = 0x27
-    ///        Arg0     = brightness (0–5)
-    ///
-    /// The WMI-to-ACPI bridge on most Clevo boards maps to a method named
-    /// WMAx in the ACPI namespace. The conventional names used by wmiacpi.sys
-    /// are WMAB (for the method GUID ABBC0F6D) and WMAD. We try both.
-    ///
-    /// If neither works on your board, run:
-    ///   powershell -c "& { [System.IO.File]::WriteAllBytes('dsdt.bin',
-    ///     (Get-WmiObject -Namespace root\wmi -Class MSAcpi_RawSMBiosTables
-    ///     | Select -First 1).SMBiosData) }" 
-    /// (or use RWEverything / acpidump) and decompile the DSDT to find the
-    /// real method name for GUID ABBC0F6D.
+    /// The BIOS on this board does NOT register GUID ABBC0F6D in the WMI
+    /// class layer (so root\WMI never gets a class for it), but the underlying
+    /// ACPI method WMAB does exist in the DSDT and can be called directly
+    /// via SetupDi + IOCTL_ACPI_EVAL_METHOD_EX on the PNP0C14\0 device.
     /// </summary>
     internal static class Keyboard
     {
-        // ACPI IOCTL to evaluate a method by path under a device
-        // (from ntifs.h / acpiioct.h)
-        private const uint IOCTL_ACPI_EVAL_METHOD        = 0x00224010;
-        private const uint IOCTL_ACPI_EVAL_METHOD_EX     = 0x00224018;
+        // ── P/Invoke ────────────────────────────────────────────────────────
 
-        // ACPI_EVAL_INPUT_BUFFER.Signature values
-        private const uint ACPI_EVAL_INPUT_BUFFER_SIGNATURE       = 0x44494e49; // 'INDI'
-        private const uint ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER_SIGNATURE = 0x01aa0001;
+        [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr SetupDiGetClassDevs(
+            ref Guid ClassGuid, string Enumerator, IntPtr hwndParent, uint Flags);
 
-        // Clevo WMI method command IDs (from clevo_wmi.c)
-        private const uint CmdSetKbWhiteLeds = 0x27;
-        private const uint CmdGetKbWhiteLeds = 0x3D;
+        [DllImport("setupapi.dll", SetLastError = true)]
+        private static extern bool SetupDiEnumDeviceInterfaces(
+            IntPtr DeviceInfoSet, IntPtr DeviceInfoData,
+            ref Guid InterfaceClassGuid, uint MemberIndex,
+            ref SP_DEVICE_INTERFACE_DATA DeviceInterfaceData);
 
-        // ACPI method names the WMI mapper uses for GUID ABBC0F6D.
-        // Try WMAB first (most Clevos), then WMAD as a fallback.
-        private static readonly string[] AcpiMethodNames = { "WMAB", "WMAD", "WMA0" };
+        [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern bool SetupDiGetDeviceInterfaceDetail(
+            IntPtr DeviceInfoSet,
+            ref SP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
+            IntPtr DeviceInterfaceDetailData,
+            uint DeviceInterfaceDetailDataSize,
+            out uint RequiredSize,
+            IntPtr DeviceInfoData);
 
-        // Path to the ACPI WMI device that owns the Clevo namespace.
-        // On most systems this is the first ACPI device under PNP0C14.
-        private const string AcpiDevicePath = @"\\.\ACPI#PNP0C14#0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}";
+        [DllImport("setupapi.dll", SetLastError = true)]
+        private static extern bool SetupDiDestroyDeviceInfoList(IntPtr DeviceInfoSet);
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern IntPtr CreateFile(
-            string lpFileName,
-            uint   dwDesiredAccess,
-            uint   dwShareMode,
-            IntPtr lpSecurityAttributes,
-            uint   dwCreationDisposition,
-            uint   dwFlagsAndAttributes,
-            IntPtr hTemplateFile);
+            string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+            IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+            uint dwFlagsAndAttributes, IntPtr hTemplateFile);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool DeviceIoControl(
-            IntPtr  hDevice,
-            uint    dwIoControlCode,
-            byte[]  lpInBuffer,
-            uint    nInBufferSize,
-            byte[]  lpOutBuffer,
-            uint    nOutBufferSize,
-            out uint lpBytesReturned,
-            IntPtr  lpOverlapped);
+            IntPtr hDevice, uint dwIoControlCode,
+            byte[] lpInBuffer, uint nInBufferSize,
+            byte[] lpOutBuffer, uint nOutBufferSize,
+            out uint lpBytesReturned, IntPtr lpOverlapped);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SP_DEVICE_INTERFACE_DATA
+        {
+            public uint cbSize;
+            public Guid InterfaceClassGuid;
+            public uint Flags;
+            public IntPtr Reserved;
+        }
+
+        // ── Constants ───────────────────────────────────────────────────────
+
+        // Device interface GUID for ACPI WMI devices (PNP0C14)
+        // {AD2E0F5E-7B0D-4F78-A7EF-2F2AFC5ACfb2}  (uppercase F intentional — same GUID)
+        private static readonly Guid ACPI_WMI_DEVICE_GUID =
+            new Guid("AD2E0F5E-7B0D-4F78-A7EF-2F2AFC5ACfb2");
+
+        private const uint DIGCF_PRESENT           = 0x00000002;
+        private const uint DIGCF_DEVICEINTERFACE   = 0x00000010;
+        private const uint GENERIC_READ_WRITE       = 0xC0000000;
+        private const uint FILE_SHARE_READ_WRITE    = 0x00000003;
+        private const uint OPEN_EXISTING            = 3;
         private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
-        private const uint GENERIC_READ_WRITE  = 0xC0000000;
-        private const uint FILE_SHARE_READ_WRITE = 0x00000003;
-        private const uint OPEN_EXISTING      = 3;
+
+        // IOCTL_ACPI_EVAL_METHOD_EX  (from acpiioct.h)
+        private const uint IOCTL_ACPI_EVAL_METHOD_EX = 0x00224018;
+
+        // ACPI_EVAL_INPUT_BUFFER_COMPLEX_EX.Signature
+        private const uint ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX = 0x45584950; // 'PIXE'
+
+        // ACPI_METHOD_ARGUMENT.Type
+        private const ushort ACPI_METHOD_ARGUMENT_INTEGER = 0x0;
+
+        // Clevo WMI method IDs (clevo_wmi.c)
+        private const uint CmdSetKbWhiteLeds = 0x27;
+        private const uint CmdGetKbWhiteLeds = 0x3D;
+
+        // ACPI method names to try (WMI bridge puts methods here under PNP0C14)
+        private static readonly string[] MethodNames = { "WMAB", "WMAD", "WMA0", "WMBC" };
+
+        // Log file next to the exe for diagnostics
+        private static readonly string LogPath = Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory, "keyboard_debug.log");
+
+        // ── Public API ──────────────────────────────────────────────────────
 
         public static bool SetLevel(int level)
         {
             level = Math.Max(0, Math.Min(5, level));
-            return InvokeAcpiMethod(CmdSetKbWhiteLeds, (uint)level, out _);
+            Log($"SetLevel({level}) -> cmd=0x{CmdSetKbWhiteLeds:X2} arg={level}");
+            bool ok = Invoke(CmdSetKbWhiteLeds, (uint)level, out uint result);
+            Log($"SetLevel result: ok={ok} returnVal=0x{result:X}");
+            return ok;
         }
 
         public static bool TryGetLevel(out int level)
         {
             level = 0;
-            if (!InvokeAcpiMethod(CmdGetKbWhiteLeds, 0, out uint result))
-                return false;
-            level = (int)(result & 0xFF);
+            if (!Invoke(CmdGetKbWhiteLeds, 0, out uint r)) return false;
+            level = (int)(r & 0xFF);
             return true;
         }
 
-        /// <summary>
-        /// Calls the ACPI WMI method by opening the PNP0C14 device and
-        /// sending IOCTL_ACPI_EVAL_METHOD_EX with the method path and args.
-        ///
-        /// The input buffer layout is:
-        ///   ACPI_EVAL_INPUT_BUFFER_EX:
-        ///     ULONG  Signature   = ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX
-        ///     CHAR   MethodName[256]   (null-terminated, relative path)
-        ///     ULONG  ArgumentCount = 2
-        ///     ACPI_METHOD_ARGUMENT[2]:
-        ///       [0] Type=INTEGER, DataLength=4, Data=MethodId (0x27 etc.)
-        ///       [1] Type=INTEGER, DataLength=4, Data=arg
-        ///
-        /// The method path under the WMI device is "\WMAB" etc.
-        /// </summary>
-        private static bool InvokeAcpiMethod(uint methodId, uint arg, out uint result)
+        // ── Core ────────────────────────────────────────────────────────────
+
+        private static bool Invoke(uint methodId, uint arg, out uint result)
         {
             result = 0;
 
-            // Try the WMI device path for PNP0C14 instance 0, then instance
-            // CLVD (some Clevo BIOSes use that identifier).
-            string[] devicePaths =
+            // Enumerate all PNP0C14 device interfaces via SetupDi
+            var guid = ACPI_WMI_DEVICE_GUID;
+            IntPtr devInfo = SetupDiGetClassDevs(ref guid, null, IntPtr.Zero,
+                DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+
+            if (devInfo == INVALID_HANDLE_VALUE)
             {
-                @"\\.\ACPI#PNP0C14#0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
-                @"\\.\ACPI#PNP0C14#clvd#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
-                @"\\.\ACPI#PNP0C14#wmi0#{ad2e0f5e-7b0d-4f78-a7ef-2f2afc5acfb2}",
-            };
-
-            foreach (string devPath in devicePaths)
-            {
-                IntPtr hDev = CreateFile(devPath, GENERIC_READ_WRITE,
-                    FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-
-                if (hDev == INVALID_HANDLE_VALUE)
-                    continue;
-
-                try
-                {
-                    foreach (string methodName in AcpiMethodNames)
-                    {
-                        if (TryEvalMethod(hDev, methodName, methodId, arg, out result))
-                            return true;
-                    }
-                }
-                finally
-                {
-                    CloseHandle(hDev);
-                }
+                Log($"SetupDiGetClassDevs failed: {Marshal.GetLastWin32Error()}");
+                return false;
             }
 
-            // Last resort: try the direct ACPI namespace path via the ACPI
-            // driver itself (requires no device enumeration).
-            return TryDirectAcpiPath(methodId, arg, out result);
+            try
+            {
+                uint idx = 0;
+                while (true)
+                {
+                    var ifData = new SP_DEVICE_INTERFACE_DATA();
+                    ifData.cbSize = (uint)Marshal.SizeOf(ifData);
+
+                    if (!SetupDiEnumDeviceInterfaces(devInfo, IntPtr.Zero,
+                            ref guid, idx++, ref ifData))
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        if (err == 259 /* ERROR_NO_MORE_ITEMS */) break;
+                        Log($"SetupDiEnumDeviceInterfaces error: {err}");
+                        break;
+                    }
+
+                    // Get the device path
+                    SetupDiGetDeviceInterfaceDetail(devInfo, ref ifData,
+                        IntPtr.Zero, 0, out uint needed, IntPtr.Zero);
+
+                    IntPtr detailBuf = Marshal.AllocHGlobal((int)needed);
+                    try
+                    {
+                        // cbSize of SP_DEVICE_INTERFACE_DETAIL_DATA:
+                        // 4+1 on 32-bit, 4+4 (aligned) on 64-bit -> use 8 for x64
+                        Marshal.WriteInt32(detailBuf, IntPtr.Size == 8 ? 8 : 6);
+
+                        if (!SetupDiGetDeviceInterfaceDetail(devInfo, ref ifData,
+                                detailBuf, needed, out _, IntPtr.Zero))
+                        {
+                            Log($"SetupDiGetDeviceInterfaceDetail failed: {Marshal.GetLastWin32Error()}");
+                            continue;
+                        }
+
+                        // Device path starts at offset 4
+                        string devPath = Marshal.PtrToStringAuto(detailBuf + 4);
+                        Log($"Trying device: {devPath}");
+
+                        IntPtr hDev = CreateFile(devPath, GENERIC_READ_WRITE,
+                            FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+
+                        if (hDev == INVALID_HANDLE_VALUE)
+                        {
+                            Log($"  CreateFile failed: {Marshal.GetLastWin32Error()}");
+                            continue;
+                        }
+
+                        try
+                        {
+                            foreach (string name in MethodNames)
+                            {
+                                Log($"  Trying method: {name}");
+                                if (TryEval(hDev, name, methodId, arg, out result))
+                                {
+                                    Log($"  SUCCESS with method {name}");
+                                    return true;
+                                }
+                            }
+                        }
+                        finally { CloseHandle(hDev); }
+                    }
+                    finally { Marshal.FreeHGlobal(detailBuf); }
+                }
+            }
+            finally { SetupDiDestroyDeviceInfoList(devInfo); }
+
+            Log("No device/method combination worked.");
+            return false;
         }
 
-        private static bool TryEvalMethod(IntPtr hDev, string methodName,
+        private static bool TryEval(IntPtr hDev, string methodName,
             uint methodId, uint arg, out uint result)
         {
             result = 0;
             try
             {
-                // ACPI_EVAL_INPUT_BUFFER_EX layout (packed):
-                //   [0..3]    Signature (ULONG) = 0x45584950 ("PIXE")
-                //   [4..259]  MethodName (CHAR[256])
-                //   [260..263] ArgumentCount (ULONG) = 2
-                //   [264..275] Arg0: Type(2), DataLen(2), Data(4), padding(4)
-                //   [276..287] Arg1: Type(2), DataLen(2), Data(4), padding(4)
-                const uint SigEx = 0x45584950; // ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX
-                const ushort ArgTypeInteger = 0;
-
-                byte[] inBuf = new byte[288];
-                WriteUInt32(inBuf, 0, SigEx);
-                WriteAsciiZ(inBuf, 4, methodName, 256);
-                WriteUInt32(inBuf, 260, 2); // ArgumentCount
-
-                // Arg0 = MethodId
-                WriteUInt16(inBuf, 264, ArgTypeInteger);
-                WriteUInt16(inBuf, 266, 4);
-                WriteUInt32(inBuf, 268, methodId);
-
-                // Arg1 = brightness/arg
-                WriteUInt16(inBuf, 276, ArgTypeInteger);
-                WriteUInt16(inBuf, 278, 4);
-                WriteUInt32(inBuf, 280, arg);
+                // ACPI_EVAL_INPUT_BUFFER_EX (manually packed, little-endian):
+                //   ULONG  Signature      [0..3]
+                //   CHAR   MethodName[256][4..259]
+                //   ULONG  ArgumentCount  [260..263]  = 2
+                //   -- ACPI_METHOD_ARGUMENT[0] (Arg0 = MethodId) --
+                //   USHORT Type           [264..265]
+                //   USHORT DataLength     [266..267]  = 4
+                //   ULONG  Data           [268..271]
+                //   -- ACPI_METHOD_ARGUMENT[1] (Arg1 = value) --
+                //   USHORT Type           [272..273]
+                //   USHORT DataLength     [274..275]  = 4
+                //   ULONG  Data           [276..279]
+                byte[] inBuf = new byte[280];
+                WL(inBuf, 0,   ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX);
+                WriteAsciiZ(inBuf, 4, methodName);
+                WL(inBuf, 260, 2);                              // ArgumentCount
+                WS(inBuf, 264, ACPI_METHOD_ARGUMENT_INTEGER);  // Arg0.Type
+                WS(inBuf, 266, 4);                             // Arg0.DataLength
+                WL(inBuf, 268, methodId);                      // Arg0.Data = MethodId
+                WS(inBuf, 272, ACPI_METHOD_ARGUMENT_INTEGER);  // Arg1.Type
+                WS(inBuf, 274, 4);                             // Arg1.DataLength
+                WL(inBuf, 276, arg);                           // Arg1.Data = brightness
 
                 byte[] outBuf = new byte[256];
                 bool ok = DeviceIoControl(hDev, IOCTL_ACPI_EVAL_METHOD_EX,
                     inBuf, (uint)inBuf.Length,
                     outBuf, (uint)outBuf.Length,
-                    out uint bytesReturned, IntPtr.Zero);
+                    out uint returned, IntPtr.Zero);
 
-                if (ok && bytesReturned >= 8)
+                if (!ok)
                 {
-                    // ACPI_EVAL_OUTPUT_BUFFER: Signature(4), Length(4), Count(4), Argument[0]
-                    result = ReadUInt32(outBuf, 16); // first return argument data
+                    Log($"    DeviceIoControl failed: {Marshal.GetLastWin32Error()}");
+                    return false;
                 }
-                return ok;
+
+                // ACPI_EVAL_OUTPUT_BUFFER:
+                //   ULONG Signature  [0..3]
+                //   ULONG Length     [4..7]
+                //   ULONG Count      [8..11]
+                //   ACPI_METHOD_ARGUMENT[0]:
+                //     USHORT Type    [12..13]
+                //     USHORT DataLen [14..15]
+                //     ULONG  Data    [16..19]
+                if (returned >= 20)
+                    result = RL(outBuf, 16);
+
+                return true;
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[kb] TryEvalMethod({methodName}): {ex.Message}");
+                Log($"    Exception in TryEval: {ex.Message}");
                 return false;
             }
         }
 
-        /// <summary>
-        /// Fallback: open acpi.sys directly and call IOCTL_ACPI_EVAL_METHOD
-        /// (non-EX) using just the short method name. This works when the
-        /// device is accessible as \\.\ACPI but not via the PNP0C14 path.
-        /// </summary>
-        private static bool TryDirectAcpiPath(uint methodId, uint arg, out uint result)
+        // ── Helpers ─────────────────────────────────────────────────────────
+
+        private static void WL(byte[] b, int o, uint v)
         {
-            result = 0;
-            string[] directPaths =
-            {
-                @"\\.\ACPI",
-                @"\\.\acpi",
-            };
-
-            foreach (string path in directPaths)
-            {
-                IntPtr hDev = CreateFile(path, GENERIC_READ_WRITE,
-                    FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-                if (hDev == INVALID_HANDLE_VALUE)
-                    continue;
-                try
-                {
-                    foreach (string methodName in AcpiMethodNames)
-                    {
-                        if (TryEvalMethod(hDev, methodName, methodId, arg, out result))
-                            return true;
-                    }
-                }
-                finally { CloseHandle(hDev); }
-            }
-
-            Console.Error.WriteLine(
-                "[kb] Could not find the ACPI WMI device (PNP0C14) or invoke " +
-                "any known method name (WMAB/WMAD/WMA0). " +
-                "Run 'devmgmt.msc', expand 'System devices', and look for " +
-                "'Microsoft Windows Management Interface for ACPI'. " +
-                "If missing, this board may need a BIOS update or the Clevo " +
-                "Windows keyboard driver package.");
-            return false;
+            b[o]=( byte)v; b[o+1]=(byte)(v>>8); b[o+2]=(byte)(v>>16); b[o+3]=(byte)(v>>24);
         }
-
-        private static void WriteUInt32(byte[] buf, int offset, uint value)
+        private static void WS(byte[] b, int o, ushort v)
         {
-            buf[offset]     = (byte)(value);
-            buf[offset + 1] = (byte)(value >> 8);
-            buf[offset + 2] = (byte)(value >> 16);
-            buf[offset + 3] = (byte)(value >> 24);
+            b[o]=(byte)v; b[o+1]=(byte)(v>>8);
         }
-        private static void WriteUInt16(byte[] buf, int offset, ushort value)
-        {
-            buf[offset]     = (byte)(value);
-            buf[offset + 1] = (byte)(value >> 8);
-        }
-        private static uint ReadUInt32(byte[] buf, int offset) =>
-            (uint)(buf[offset] | (buf[offset+1] << 8) | (buf[offset+2] << 16) | (buf[offset+3] << 24));
+        private static uint RL(byte[] b, int o) =>
+            (uint)(b[o]|(b[o+1]<<8)|(b[o+2]<<16)|(b[o+3]<<24));
 
-        private static void WriteAsciiZ(byte[] buf, int offset, string s, int maxLen)
+        private static void WriteAsciiZ(byte[] buf, int offset, string s)
         {
             int i = 0;
-            foreach (char c in s)
-            {
-                if (i >= maxLen - 1) break;
-                buf[offset + i++] = (byte)c;
-            }
+            foreach (char c in s) { if (i >= 255) break; buf[offset + i++] = (byte)c; }
             buf[offset + i] = 0;
+        }
+
+        private static void Log(string msg)
+        {
+            try
+            {
+                string line = $"[{DateTime.Now:HH:mm:ss.fff}] {msg}";
+                Console.Error.WriteLine(line);
+                File.AppendAllText(LogPath, line + Environment.NewLine);
+            }
+            catch { }
         }
     }
 }
