@@ -5,18 +5,28 @@ using System.Runtime.InteropServices;
 namespace LzHwCtrl
 {
     /// <summary>
-    /// Controls the white keyboard backlight by sending IOCTL_ACPI_EVAL_METHOD
-    /// directly to the PNP0C14 ACPI WMI device.
+    /// Controls the white keyboard backlight via the Clevo WMI method interface.
     ///
-    /// The two PNP0C14 instances on this board have no registered device
-    /// interface GUIDs (confirmed via Get-PnpDeviceProperty), so the normal
-    /// SetupDi enumeration finds nothing. However their PDO names are known:
-    ///   ACPI\PNP0C14\0    -> \Device\00000028
-    ///   ACPI\PNP0C14\MXM2 -> \Device\00000031
+    /// HOW THE LINUX DRIVER ACTUALLY WORKS (clevo_wmi.c):
+    ///   wmi_evaluate_method(CLEVO_WMI_METHOD_GUID,
+    ///       instance  = 0x00,
+    ///       method_id = cmd,          // e.g. 0x27 = set KB brightness
+    ///       in_buf    = &arg as u32,  // e.g. brightness 0-5
+    ///       out_buf   = ...)
     ///
-    /// CreateFile can open kernel device objects directly using the
-    /// \\.\GlobalRoot\Device\XXXXXXXX syntax, which bypasses the device
-    /// interface layer entirely.
+    /// On Windows, wmi_evaluate_method maps to IOCTL_ACPI_EVAL_METHOD sent to
+    /// the PNP0C14 device with:
+    ///   ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER:
+    ///     Signature         = 0x01AA0001
+    ///     MethodNameAsUlong = cmd packed as ULONG (e.g. 0x00000027)
+    ///     IntegerArgument   = arg (e.g. brightness)
+    ///
+    /// The PNP0C14 device is opened via its symbolic link in the device
+    /// interface list. Since no interface GUID is registered, we use the
+    /// CM_Get_Device_Interface_List API with the ACPI WMI device GUID, and
+    /// if that fails, fall back to opening by the known symlink path that
+    /// wmiacpi.sys creates at \\\\.\\WMIDataDevice (the standard WMI device
+    /// user-mode open path).
     /// </summary>
     internal static class Keyboard
     {
@@ -29,7 +39,7 @@ namespace LzHwCtrl
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool DeviceIoControl(
             IntPtr hDevice, uint dwIoControlCode,
-            byte[] lpInBuffer,  uint nInBufferSize,
+            byte[] lpInBuffer, uint nInBufferSize,
             byte[] lpOutBuffer, uint nOutBufferSize,
             out uint lpBytesReturned, IntPtr lpOverlapped);
 
@@ -37,33 +47,31 @@ namespace LzHwCtrl
         private static extern bool CloseHandle(IntPtr hObject);
 
         private static readonly IntPtr INVALID_HANDLE = new IntPtr(-1);
-        private const uint GENERIC_READ_WRITE  = 0xC0000000;
-        private const uint FILE_SHARE_ALL      = 0x00000007;
-        private const uint OPEN_EXISTING       = 3;
+        private const uint GENERIC_READ_WRITE = 0xC0000000;
+        private const uint FILE_SHARE_ALL     = 0x00000007;
+        private const uint OPEN_EXISTING      = 3;
 
-        // IOCTL_ACPI_EVAL_METHOD (acpiioct.h)
+        // IOCTL_ACPI_EVAL_METHOD (acpiioct.h: FILE_DEVICE_ACPI=0x22, func=0x100,
+        // METHOD_BUFFERED=0, FILE_READ_ACCESS|FILE_WRITE_ACCESS=3 -> 0x00224010)
         private const uint IOCTL_ACPI_EVAL_METHOD = 0x00224010;
 
-        // ACPI_EVAL_INPUT_BUFFER.Signature
-        private const uint ACPI_EVAL_INPUT_BUFFER_SIGNATURE = 0x44494E49; // 'INDI'
+        // ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER_SIGNATURE (acpiioct.h: 0x01AA0001)
+        // Used when the method takes exactly one ULONG argument.
+        private const uint ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER_SIGNATURE = 0x01AA0001;
 
-        // ACPI_METHOD_ARGUMENT.Type
-        private const ushort ACPI_METHOD_ARGUMENT_INTEGER = 0;
-
-        // Clevo WMI command IDs (from clevo_wmi.c)
+        // Clevo WMI method IDs (clevo_interfaces.h)
         private const uint CmdSetKb = 0x27;
         private const uint CmdGetKb = 0x3D;
 
-        // Device paths: \\.\GlobalRoot maps to the NT object namespace root,
-        // so \\.\GlobalRoot\Device\00000028 opens \Device\00000028 directly.
+        // The WMI device that wmiacpi.sys exposes for PNP0C14 devices.
+        // User-mode WMI calls go through this device; it routes to the
+        // correct PNP0C14 instance based on the GUID in the request.
+        // This is the same device that WMI queries use internally.
         private static readonly string[] DevicePaths =
         {
-            @"\\.\GlobalRoot\Device\00000028",  // ACPI\PNP0C14\0
-            @"\\.\GlobalRoot\Device\00000031",  // ACPI\PNP0C14\MXM2
+            @"\\.\WMIDataDevice",       // Standard wmiacpi.sys user-mode path
+            @"\\.\GLOBALROOT\Device\WMIDataDevice",
         };
-
-        // ACPI method names the WMI bridge generates for GUID ABBC0F6D.
-        private static readonly string[] MethodNames = { "WMAB", "WMAD", "WMA0", "WMBC" };
 
         private static readonly string LogPath = Path.Combine(
             AppDomain.CurrentDomain.BaseDirectory, "keyboard_debug.log");
@@ -89,75 +97,55 @@ namespace LzHwCtrl
 
         // ── Core ────────────────────────────────────────────────────────────
 
-        private static bool Invoke(uint methodId, uint arg, out uint result)
+        private static bool Invoke(uint cmd, uint arg, out uint result)
         {
             result = 0;
-            foreach (string devPath in DevicePaths)
+            foreach (string path in DevicePaths)
             {
-                IntPtr h = CreateFile(devPath, GENERIC_READ_WRITE,
+                IntPtr h = CreateFile(path, GENERIC_READ_WRITE,
                     FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
 
                 if (h == INVALID_HANDLE)
                 {
-                    Log($"  CreateFile({devPath}) failed: err={Marshal.GetLastWin32Error()}");
+                    Log($"  CreateFile({path}) failed: err={Marshal.GetLastWin32Error()}");
                     continue;
                 }
 
-                Log($"  Opened {devPath}");
+                Log($"  Opened {path}");
                 try
                 {
-                    foreach (string method in MethodNames)
-                    {
-                        if (TryEval(h, method, methodId, arg, out result))
-                        {
-                            Log($"  SUCCESS: {devPath} / {method}");
-                            return true;
-                        }
-                    }
+                    if (TryEval(h, cmd, arg, out result))
+                        return true;
                 }
                 finally { CloseHandle(h); }
             }
 
-            Log("  No device/method combination succeeded.");
+            Log("  All paths failed.");
             return false;
         }
 
-        private static bool TryEval(IntPtr hDev, string methodName,
-            uint methodId, uint arg, out uint result)
+        /// <summary>
+        /// Sends IOCTL_ACPI_EVAL_METHOD with ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER.
+        ///
+        /// Layout (acpiioct.h):
+        ///   [0..3]  Signature         = 0x01AA0001
+        ///   [4..7]  MethodNameAsUlong = cmd (packed as little-endian ULONG)
+        ///   [8..15] IntegerArgument   = arg (ULONG64)
+        ///
+        /// This matches how clevo_wmi.c calls wmi_evaluate_method():
+        ///   instance=0, method_id=cmd, in_buf=&arg(u32)
+        /// </summary>
+        private static bool TryEval(IntPtr hDev, uint cmd, uint arg, out uint result)
         {
             result = 0;
             try
             {
-                // Pack method name as little-endian ULONG (e.g. "WMAB" -> 0x42414D57)
-                if (methodName.Length < 4) methodName = methodName.PadRight(4);
-                uint nameUlong = (uint)(
-                    methodName[0]         |
-                    (methodName[1] <<  8) |
-                    (methodName[2] << 16) |
-                    (methodName[3] << 24));
-
-                // ACPI_EVAL_INPUT_BUFFER layout (acpiioct.h):
-                //  [0..3]   Signature         ULONG  = 'INDI'
-                //  [4..7]   MethodNameAsUlong ULONG  = packed method name
-                //  [8..11]  ArgumentCount     ULONG  = 2
-                //  -- ACPI_METHOD_ARGUMENT[0] (MethodId) --
-                //  [12..13] Type     USHORT = 0 (INTEGER)
-                //  [14..15] DataLen  USHORT = 4
-                //  [16..19] Data     ULONG  = methodId
-                //  -- ACPI_METHOD_ARGUMENT[1] (arg/brightness) --
-                //  [20..21] Type     USHORT = 0 (INTEGER)
-                //  [22..23] DataLen  USHORT = 4
-                //  [24..27] Data     ULONG  = arg
-                byte[] inBuf = new byte[28];
-                WL(inBuf,  0, ACPI_EVAL_INPUT_BUFFER_SIGNATURE);
-                WL(inBuf,  4, nameUlong);
-                WL(inBuf,  8, 2);
-                WS(inBuf, 12, ACPI_METHOD_ARGUMENT_INTEGER);
-                WS(inBuf, 14, 4);
-                WL(inBuf, 16, methodId);
-                WS(inBuf, 20, ACPI_METHOD_ARGUMENT_INTEGER);
-                WS(inBuf, 22, 4);
-                WL(inBuf, 24, arg);
+                // ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER (16 bytes)
+                byte[] inBuf = new byte[16];
+                WL(inBuf, 0, ACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER_SIGNATURE);
+                WL(inBuf, 4, cmd);          // MethodNameAsUlong
+                WL(inBuf, 8, arg);          // IntegerArgument low 32 bits
+                WL(inBuf, 12, 0);           // IntegerArgument high 32 bits
 
                 byte[] outBuf = new byte[256];
                 bool ok = DeviceIoControl(hDev, IOCTL_ACPI_EVAL_METHOD,
@@ -166,8 +154,15 @@ namespace LzHwCtrl
                     out uint returned, IntPtr.Zero);
 
                 int err = Marshal.GetLastWin32Error();
-                Log($"    {methodName} id=0x{methodId:X2} arg={arg}: ok={ok} winerr={err} returned={returned}");
+                Log($"    cmd=0x{cmd:X2} arg={arg}: ok={ok} winerr={err} returned={returned}");
 
+                // ACPI_EVAL_OUTPUT_BUFFER:
+                //   [0..3]  Signature
+                //   [4..7]  Length
+                //   [8..11] Count
+                //   [12..13] Arg[0].Type
+                //   [14..15] Arg[0].DataLength
+                //   [16..19] Arg[0].Data
                 if (ok && returned >= 20)
                     result = RL(outBuf, 16);
 
@@ -175,7 +170,7 @@ namespace LzHwCtrl
             }
             catch (Exception ex)
             {
-                Log($"    {methodName}: exception: {ex.Message}");
+                Log($"    Exception: {ex.Message}");
                 return false;
             }
         }
@@ -185,10 +180,6 @@ namespace LzHwCtrl
         private static void WL(byte[] b, int o, uint v)
         {
             b[o]=(byte)v; b[o+1]=(byte)(v>>8); b[o+2]=(byte)(v>>16); b[o+3]=(byte)(v>>24);
-        }
-        private static void WS(byte[] b, int o, ushort v)
-        {
-            b[o]=(byte)v; b[o+1]=(byte)(v>>8);
         }
         private static uint RL(byte[] b, int o) =>
             (uint)(b[o]|(b[o+1]<<8)|(b[o+2]<<16)|(b[o+3]<<24));
