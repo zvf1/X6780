@@ -205,7 +205,8 @@ namespace LzHwCtrl
         }
 
         /// <summary>
-        /// Keyboard backlight row — Off + levels 1–5.
+        /// Keyboard backlight row. Shows buttons if clevo_kb.sys is installed,
+        /// otherwise shows an informational message with install instructions.
         /// </summary>
         private FlowLayoutPanel BuildKbRow(int initialIndex = 0)
         {
@@ -227,8 +228,21 @@ namespace LzHwCtrl
                 Margin    = new Padding(0, 6, 6, 0),
             });
 
+            if (!Keyboard.IsDriverPresent)
+            {
+                panel.Controls.Add(new Label
+                {
+                    Text      = "Driver not installed — run driver/build_and_install.ps1 first",
+                    AutoSize  = true,
+                    ForeColor = SystemColors.GrayText,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Margin    = new Padding(2, 8, 0, 0),
+                });
+                return panel;
+            }
+
             string[] labels = { "Off", "1", "2", "3", "4", "5" };
-            var buttons     = new Button[labels.Length];
+            var buttons = new Button[labels.Length];
 
             void SetActive(int activeIdx)
             {
