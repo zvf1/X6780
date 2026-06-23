@@ -79,7 +79,7 @@ namespace LzHwCtrl
             table.Controls.Add(BuildButtonRow("CPU FAN",  FanButtons,  duty => _loop.CpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("GPU FAN",  FanButtons,  duty => _loop.GpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("CPU FREQ", FreqButtons, pct  => CpuFreq.SetMaxPercent(pct), initialIndex: 0));
-            table.Controls.Add(BuildKbUnsupportedRow());
+            table.Controls.Add(BuildKbRow(initialIndex: 0));
 
             Controls.Add(table);
             Controls.Add(_statusLbl);
@@ -205,10 +205,9 @@ namespace LzHwCtrl
         }
 
         /// <summary>
-        /// Keyboard backlight row — shown as disabled with an explanation,
-        /// because the underlying ACPI method requires a kernel driver on Windows.
+        /// Keyboard backlight row — Off + levels 1–5.
         /// </summary>
-        private FlowLayoutPanel BuildKbUnsupportedRow()
+        private FlowLayoutPanel BuildKbRow(int initialIndex = 0)
         {
             var panel = new FlowLayoutPanel
             {
@@ -228,14 +227,50 @@ namespace LzHwCtrl
                 Margin    = new Padding(0, 6, 6, 0),
             });
 
-            panel.Controls.Add(new Label
+            string[] labels = { "Off", "1", "2", "3", "4", "5" };
+            var buttons     = new Button[labels.Length];
+
+            void SetActive(int activeIdx)
             {
-                Text      = "Not available on Windows (requires kernel driver)",
-                AutoSize  = true,
-                ForeColor = SystemColors.GrayText,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin    = new Padding(2, 8, 0, 0),
-            });
+                for (int j = 0; j < buttons.Length; j++)
+                {
+                    buttons[j].BackColor = (j == activeIdx) ? ActiveColor   : InactiveColor;
+                    buttons[j].ForeColor = (j == activeIdx) ? ActiveText    : InactiveText;
+                    buttons[j].FlatStyle = FlatStyle.Flat;
+                    buttons[j].FlatAppearance.BorderColor =
+                        (j == activeIdx) ? Color.FromArgb(0, 84, 153) : SystemColors.ControlDark;
+                }
+            }
+
+            for (int i = 0; i < labels.Length; i++)
+            {
+                int level = i;
+                var btn = new Button
+                {
+                    Text      = labels[i],
+                    AutoSize  = false,
+                    Width     = 58,
+                    Height    = 28,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin    = new Padding(2),
+                };
+                btn.Click += (_, __) =>
+                {
+                    if (Keyboard.SetLevel(level))
+                        SetActive(level);
+                };
+                buttons[i] = btn;
+                panel.Controls.Add(btn);
+            }
+
+            try
+            {
+                if (Keyboard.TryGetLevel(out int currentLevel))
+                    SetActive(currentLevel);
+                else
+                    SetActive(initialIndex);
+            }
+            catch { SetActive(initialIndex); }
 
             return panel;
         }
