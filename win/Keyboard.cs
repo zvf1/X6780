@@ -7,7 +7,7 @@ namespace LzHwCtrl
     /// Controls the white keyboard backlight via the CLEVO_GET WMI class,
     /// which is registered by SvThANSP.sys when it is loaded.
     ///
-    /// Uses SetWhiteLedKB(Data: UInt16) and GetWhiteLedKB() directly --
+    /// Uses SetWhiteLedKB(Data: UInt16) and GetWhiteLedKB() directly —
     /// confirmed working on P65/P67RGRERA via WMI introspection.
     ///
     /// If SvThANSP.sys is not loaded (CLEVO_GET class absent), all calls
@@ -18,7 +18,7 @@ namespace LzHwCtrl
         private const string WmiNamespace = "root\\wmi";
         private const string WmiClass     = "CLEVO_GET";
 
-        // Cached WMI object -- fetched once, reused on each call.
+        // Cached WMI object — fetched once, reused on each call.
         private static ManagementObject? _wmiObj;
         private static bool _checked;
 
