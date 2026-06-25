@@ -266,7 +266,7 @@ Write-Host ""
 Write-Host "  To launch manually:"
 Write-Host "    $ExePath"
 Write-Host ""
-Write-Host "  To uninstall:"
+Write-Host "  To UNInstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex"
 Write-Host ""
 
