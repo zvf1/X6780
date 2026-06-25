@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-  lzhwctrl for Windows — installer.
+  lzhwctrl for Windows -- installer.
 
 .DESCRIPTION
   Windows counterpart to arch/eosinstall.sh and mint/mintinstall.sh.
@@ -188,6 +188,44 @@ Info "Installing to $InstallDir ..."
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Copy-Item "$publishDir\*" -Destination $InstallDir -Recurse -Force
 Ok "Installed to $InstallDir"
+
+# ---- 5b. Install and start SvThANSP.sys (Clevo WMI provider) ----
+# This driver registers the CLEVO_GET WMI class in root\wmi, which exposes
+# SetWhiteLedKB / GetWhiteLedKB -- the keyboard backlight methods used by
+# the app. Without it, the keyboard row is disabled.
+Info "Installing SvThANSP.sys (Clevo WMI provider)..."
+$svThANSPSrcPath = Join-Path $repoRoot.FullName $SvThANSPSrc
+if (Test-Path $svThANSPSrcPath) {
+    Copy-Item $svThANSPSrcPath -Destination $SvThANSPDst -Force
+
+    # Remove any stale service entry before re-creating it.
+    $svc = Get-Service -Name $SvThANSPSvc -ErrorAction SilentlyContinue
+    if ($svc) {
+        if ($svc.Status -eq "Running") {
+            sc.exe stop $SvThANSPSvc | Out-Null
+            Start-Sleep -Seconds 1
+        }
+        sc.exe delete $SvThANSPSvc | Out-Null
+        Start-Sleep -Seconds 1
+    }
+
+    sc.exe create $SvThANSPSvc type= kernel start= auto error= normal `
+        binPath= $SvThANSPDst DisplayName= "Clevo EC WMI Provider" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Warn "sc.exe create failed for SvThANSP (exit $LASTEXITCODE) - keyboard backlight may not work."
+    } else {
+        sc.exe start $SvThANSPSvc | Out-Null
+        Start-Sleep -Seconds 1
+        $svc = Get-Service -Name $SvThANSPSvc -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq "Running") {
+            Ok "SvThANSP.sys installed and running."
+        } else {
+            Warn "SvThANSP.sys installed but failed to start. Check Event Viewer for details."
+        }
+    }
+} else {
+    Warn "SvThANSP.sys not found at $svThANSPSrcPath - keyboard backlight will be disabled."
+}
 
 # ---- 6. Scheduled Task autostart (Windows equivalent of the XDG autostart
 #         .desktop entry the Linux installers write) ----
