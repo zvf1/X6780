@@ -49,6 +49,10 @@ $WorkDir    = "$env:TEMP\X6780-build"
 $ProjectSubdir = "win"
 $DllSrc        = "win\inpoutx64.dll"
 $LhmSrc        = "win\LibreHardwareMonitor"
+$SvThANSPSrc   = "win\SvThANSP.sys"
+$SvThANSPSvc   = "SvThANSP"
+# SvThANSPDst is set after InstallDir is known (same value, defined here for clarity)
+$SvThANSPDst   = "$InstallDir\SvThANSP.sys"
 
 try {
 
@@ -266,7 +270,7 @@ Write-Host ""
 Write-Host "  To launch manually:"
 Write-Host "    $ExePath"
 Write-Host ""
-Write-Host "  To UNInstall:"
+Write-Host "  To uNinstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex"
 Write-Host ""
 
