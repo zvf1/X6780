@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-  lzhwctrl for Windows — uninstaller.
+  lzhwctrl for Windows -- uninstaller.
 
 .USAGE
   irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
@@ -42,6 +42,20 @@ if ($proc) {
     Warn "No running process found (safe to ignore)."
 }
 
+# ---- 1b. Stop and remove SvThANSP.sys (Clevo WMI provider) ----
+Info "Stopping and removing SvThANSP driver service..."
+$svc = Get-Service -Name "SvThANSP" -ErrorAction SilentlyContinue
+if ($svc) {
+    if ($svc.Status -eq "Running") {
+        sc.exe stop SvThANSP | Out-Null
+        Start-Sleep -Seconds 1
+    }
+    sc.exe delete SvThANSP | Out-Null
+    Ok "SvThANSP service removed."
+} else {
+    Warn "SvThANSP service not found (safe to ignore)."
+}
+
 # ---- 2. Remove scheduled task ----
 Info "Removing scheduled task '$TaskName'..."
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
@@ -64,7 +78,8 @@ if (Test-Path $InstallDir) {
 Write-Host ""
 Write-Host "Uninstall complete." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Note: this does not unload the inpoutx64 kernel driver service,"
+Write-Host "  Note: this removes the SvThANSP driver (keyboard backlight) and
+  does not unload the inpoutx64 kernel driver service,"
 Write-Host "  since it's shared infrastructure other apps might also use."
 Write-Host "  If you want it gone too: sc.exe stop inpoutx64; sc.exe delete inpoutx64"
 Write-Host ""
