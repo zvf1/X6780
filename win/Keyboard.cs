@@ -1,95 +1,97 @@
 using System;
-using System.Runtime.InteropServices;
+using System.Management;
 
 namespace LzHwCtrl
 {
     /// <summary>
-    /// Controls the white keyboard backlight via clevo_kb.sys — a minimal
-    /// KMDF driver that evaluates the ACPI _DSM method on the CLV0001 device.
+    /// Controls the white keyboard backlight via the CLEVO_GET WMI class,
+    /// which is registered by SvThANSP.sys when it is loaded.
     ///
-    /// If the driver is not installed, all calls silently return false and
-    /// the keyboard row shows a "driver not found" message.
+    /// Uses SetWhiteLedKB(Data: UInt16) and GetWhiteLedKB() directly --
+    /// confirmed working on P65/P67RGRERA via WMI introspection.
     ///
-    /// Install the driver first by running build_and_install.ps1 from the
-    /// driver/ subdirectory of the repo (elevated PowerShell).
+    /// If SvThANSP.sys is not loaded (CLEVO_GET class absent), all calls
+    /// silently return false and the keyboard row shows a status message.
     /// </summary>
     internal static class Keyboard
     {
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        private static extern IntPtr CreateFile(
-            string lpFileName, uint dwDesiredAccess, uint dwShareMode,
-            IntPtr lpSecurityAttributes, uint dwCreationDisposition,
-            uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+        private const string WmiNamespace = "root\\wmi";
+        private const string WmiClass     = "CLEVO_GET";
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool DeviceIoControl(
-            IntPtr hDevice, uint dwIoControlCode,
-            byte[] lpInBuffer,  uint nInBufferSize,
-            byte[] lpOutBuffer, uint nOutBufferSize,
-            out uint lpBytesReturned, IntPtr lpOverlapped);
+        // Cached WMI object -- fetched once, reused on each call.
+        private static ManagementObject? _wmiObj;
+        private static bool _checked;
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr hObject);
-
-        private static readonly IntPtr INVALID_HANDLE = new IntPtr(-1);
-        private const uint GENERIC_READ_WRITE = 0xC0000000;
-        private const uint FILE_SHARE_ALL     = 0x00000007;
-        private const uint OPEN_EXISTING      = 3;
-
-        // CTL_CODE(0x22, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-        private const uint IOCTL_CLEVOKB_SET_LEVEL = 0x00220000 | (0x800 << 2);
-        private const uint IOCTL_CLEVOKB_GET_LEVEL = 0x00220000 | (0x801 << 2);
-
-        private const string DevicePath = @"\\.\ClevoKbBacklight";
-
-        public static bool IsDriverPresent
+        private static ManagementObject? GetWmiObject()
         {
-            get
+            if (_checked) return _wmiObj;
+            _checked = true;
+            try
             {
-                IntPtr h = CreateFile(DevicePath, GENERIC_READ_WRITE,
-                    FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-                if (h == INVALID_HANDLE) return false;
-                CloseHandle(h);
-                return true;
+                var searcher = new ManagementObjectSearcher(
+                    WmiNamespace,
+                    $"SELECT * FROM {WmiClass}");
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    _wmiObj = obj;
+                    break;
+                }
             }
+            catch { /* CLEVO_GET not registered; SvThANSP.sys not loaded */ }
+            return _wmiObj;
         }
 
+        public static bool IsDriverPresent => GetWmiObject() != null;
+
+        /// <summary>Set brightness level 0 (off) through 5 (max).</summary>
         public static bool SetLevel(int level)
         {
             level = Math.Max(0, Math.Min(5, level));
-            IntPtr h = CreateFile(DevicePath, GENERIC_READ_WRITE,
-                FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-            if (h == INVALID_HANDLE) return false;
+            var obj = GetWmiObject();
+            if (obj == null) return false;
             try
             {
-                byte[] inBuf = BitConverter.GetBytes((uint)level);
-                byte[] outBuf = new byte[4];
-                return DeviceIoControl(h, IOCTL_CLEVOKB_SET_LEVEL,
-                    inBuf, (uint)inBuf.Length,
-                    outBuf, (uint)outBuf.Length,
-                    out _, IntPtr.Zero);
+                var inParams = obj.GetMethodParameters("SetWhiteLedKB");
+                inParams["Data"] = (ushort)level;
+                obj.InvokeMethod("SetWhiteLedKB", inParams, null);
+                return true;
             }
-            finally { CloseHandle(h); }
+            catch { return false; }
         }
 
+        /// <summary>Read the current brightness level (0-5).</summary>
         public static bool TryGetLevel(out int level)
         {
             level = 0;
-            IntPtr h = CreateFile(DevicePath, GENERIC_READ_WRITE,
-                FILE_SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-            if (h == INVALID_HANDLE) return false;
+            var obj = GetWmiObject();
+            if (obj == null) return false;
             try
             {
-                byte[] outBuf = new byte[4];
-                bool ok = DeviceIoControl(h, IOCTL_CLEVOKB_GET_LEVEL,
-                    null, 0,
-                    outBuf, (uint)outBuf.Length,
-                    out uint returned, IntPtr.Zero);
-                if (ok && returned >= 4)
-                    level = (int)BitConverter.ToUInt32(outBuf, 0);
-                return ok;
+                var result = obj.InvokeMethod("GetWhiteLedKB", null, null);
+                // GetWhiteLedKB returns a ManagementBaseObject; value is in its first property.
+                if (result != null)
+                {
+                    foreach (PropertyData prop in ((ManagementBaseObject)result).Properties)
+                    {
+                        level = Convert.ToInt32(prop.Value);
+                        break;
+                    }
+                }
+                return true;
             }
-            finally { CloseHandle(h); }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Force a re-check of the WMI class (e.g. after the driver is loaded
+        /// at runtime). Call this if IsDriverPresent was false on startup but
+        /// SvThANSP.sys has since been started.
+        /// </summary>
+        public static void ResetCache()
+        {
+            _wmiObj?.Dispose();
+            _wmiObj  = null;
+            _checked = false;
         }
     }
 }
