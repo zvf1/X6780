@@ -27,6 +27,12 @@ namespace LzHwCtrl
             ("AUTO", null), ("60%", 60), ("70%", 70), ("80%", 80), ("90%", 90),
         };
 
+        // Keyboard backlight: label is display text, value is brightness level 0-5.
+        private static readonly (string label, int level)[] KbButtons =
+        {
+            ("Off", 0), ("1", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5),
+        };
+
         // Highlight colour used for the active button in each row.
         private static readonly Color ActiveColor   = Color.FromArgb(0, 120, 215); // Windows-blue
         private static readonly Color InactiveColor = SystemColors.Control;
@@ -44,11 +50,11 @@ namespace LzHwCtrl
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox     = false;
             AutoScroll      = false;
-            // 7 fan buttons × 62 px + 78 px label + 24 px padding = ~560 px client width.
+            // 7 fan buttons x 62 px + 78 px label + 24 px padding = ~560 px client width.
             // Height is driven by row count; 220 px fits 4 rows + temp + status comfortably.
             ClientSize      = new Size(560, 220);
 
-            // ── Outer layout ────────────────────────────────────────────────
+            // -- Outer layout ------------------------------------------------
             // TableLayoutPanel fills the form so rows always have room to
             // render all their buttons without clipping.
             var table = new TableLayoutPanel
@@ -74,12 +80,12 @@ namespace LzHwCtrl
             tempPanel.Controls.Add(_gpuTempLbl);
             table.Controls.Add(tempPanel);
 
-            // Button rows — each returns a panel; index 0 in each group is
+            // Button rows -- each returns a panel; index 0 in each group is
             // highlighted immediately so the user sees the current mode.
             table.Controls.Add(BuildButtonRow("CPU FAN",  FanButtons,  duty => _loop.CpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("GPU FAN",  FanButtons,  duty => _loop.GpuOverride = duty,  initialIndex: 0));
             table.Controls.Add(BuildButtonRow("CPU FREQ", FreqButtons, pct  => CpuFreq.SetMaxPercent(pct), initialIndex: 0));
-            table.Controls.Add(BuildKbRow(initialIndex: 0));
+            table.Controls.Add(BuildButtonRow("KEYBOARD", KbButtons, lvl => Keyboard.SetLevel(lvl), initialIndex: 0));
 
             Controls.Add(table);
             Controls.Add(_statusLbl);
@@ -204,90 +210,6 @@ namespace LzHwCtrl
             return panel;
         }
 
-        /// <summary>
-        /// Keyboard backlight row. Shows buttons if clevo_kb.sys is installed,
-        /// otherwise shows an informational message with install instructions.
-        /// </summary>
-        private FlowLayoutPanel BuildKbRow(int initialIndex = 0)
-        {
-            var panel = new FlowLayoutPanel
-            {
-                AutoSize      = true,
-                AutoSizeMode  = AutoSizeMode.GrowAndShrink,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents  = false,
-                Margin        = new Padding(0, 2, 0, 2),
-            };
-
-            panel.Controls.Add(new Label
-            {
-                Text      = "KEYBOARD",
-                AutoSize  = false,
-                Width     = 72,
-                TextAlign = ContentAlignment.MiddleRight,
-                Margin    = new Padding(0, 6, 6, 0),
-            });
-
-            if (!Keyboard.IsDriverPresent)
-            {
-                panel.Controls.Add(new Label
-                {
-                    Text      = "Driver not installed — run driver/build_and_install.ps1 first",
-                    AutoSize  = true,
-                    ForeColor = SystemColors.GrayText,
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    Margin    = new Padding(2, 8, 0, 0),
-                });
-                return panel;
-            }
-
-            string[] labels = { "Off", "1", "2", "3", "4", "5" };
-            var buttons = new Button[labels.Length];
-
-            void SetActive(int activeIdx)
-            {
-                for (int j = 0; j < buttons.Length; j++)
-                {
-                    buttons[j].BackColor = (j == activeIdx) ? ActiveColor   : InactiveColor;
-                    buttons[j].ForeColor = (j == activeIdx) ? ActiveText    : InactiveText;
-                    buttons[j].FlatStyle = FlatStyle.Flat;
-                    buttons[j].FlatAppearance.BorderColor =
-                        (j == activeIdx) ? Color.FromArgb(0, 84, 153) : SystemColors.ControlDark;
-                }
-            }
-
-            for (int i = 0; i < labels.Length; i++)
-            {
-                int level = i;
-                var btn = new Button
-                {
-                    Text      = labels[i],
-                    AutoSize  = false,
-                    Width     = 58,
-                    Height    = 28,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin    = new Padding(2),
-                };
-                btn.Click += (_, __) =>
-                {
-                    if (Keyboard.SetLevel(level))
-                        SetActive(level);
-                };
-                buttons[i] = btn;
-                panel.Controls.Add(btn);
-            }
-
-            try
-            {
-                if (Keyboard.TryGetLevel(out int currentLevel))
-                    SetActive(currentLevel);
-                else
-                    SetActive(initialIndex);
-            }
-            catch { SetActive(initialIndex); }
-
-            return panel;
-        }
 
         private void RefreshLabels()
         {
