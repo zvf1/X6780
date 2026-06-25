@@ -209,19 +209,14 @@ if (Test-Path $svThANSPSrcPath) {
         Start-Sleep -Seconds 1
     }
 
-    # sc.exe requires all params as a single string -- backtick continuation
-    # breaks it. Build the argument list explicitly instead.
-    $scArgs = @(
-        "create", $SvThANSPSvc,
-        "type=", "kernel",
-        "start=", "auto",
-        "error=", "normal",
-        "binPath=", $SvThANSPDst,
-        "DisplayName=", "Clevo EC WMI Provider"
-    )
-    & sc.exe @scArgs | Out-Null
+    # sc.exe is very picky: params must be lowercase, and paths with spaces
+    # need embedded quotes that survive PowerShell argument passing.
+    # Use cmd /c to sidestep PowerShell's argument rewriting entirely.
+    $scCreate = "sc.exe create $SvThANSPSvc type= kernel start= auto error= normal binpath= `"$SvThANSPDst`" displayname= `"Clevo EC WMI Provider`""
+    cmd /c $scCreate | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Warn "sc.exe create failed for SvThANSP (exit $LASTEXITCODE) - keyboard backlight may not work."
+        Write-Host "  Command was: $scCreate" -ForegroundColor DarkGray
     } else {
         sc.exe start $SvThANSPSvc | Out-Null
         Start-Sleep -Seconds 2
