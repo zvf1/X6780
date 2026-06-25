@@ -209,18 +209,27 @@ if (Test-Path $svThANSPSrcPath) {
         Start-Sleep -Seconds 1
     }
 
-    sc.exe create $SvThANSPSvc type= kernel start= auto error= normal `
-        binPath= $SvThANSPDst DisplayName= "Clevo EC WMI Provider" | Out-Null
+    # sc.exe requires all params as a single string -- backtick continuation
+    # breaks it. Build the argument list explicitly instead.
+    $scArgs = @(
+        "create", $SvThANSPSvc,
+        "type=", "kernel",
+        "start=", "auto",
+        "error=", "normal",
+        "binPath=", $SvThANSPDst,
+        "DisplayName=", "Clevo EC WMI Provider"
+    )
+    & sc.exe @scArgs | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Warn "sc.exe create failed for SvThANSP (exit $LASTEXITCODE) - keyboard backlight may not work."
     } else {
         sc.exe start $SvThANSPSvc | Out-Null
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 2
         $svc = Get-Service -Name $SvThANSPSvc -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq "Running") {
             Ok "SvThANSP.sys installed and running."
         } else {
-            Warn "SvThANSP.sys installed but failed to start. Check Event Viewer for details."
+            Warn "SvThANSP.sys installed but did not reach Running state. Check Event Viewer -> Windows Logs -> System for details."
         }
     }
 } else {
