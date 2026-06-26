@@ -1,95 +1,113 @@
-# lzhwctrl for Windows 10 x64
+# lzhwctrl for Windows
 
-A C# WinForms port of `lzhwctrl.py`, using the two dependencies you already
-staged: `inpoutx64.dll` for raw EC port I/O (replaces `/dev/port`) and
-LibreHardwareMonitorLib for CPU/GPU temps (replaces the hwmon lookups).
+System tray utility for the Clevo P65/P67RGRERA (i7-6700HQ / GTX 980M) that
+controls fan curves, keyboard backlight, and CPU frequency cap from a right-click
+menu. Installs and uninstalls with a single command.
 
-## What ported directly
+## Install
 
-- **EC fan control** (`EcPort.cs`) -- same protocol constants as Linux/your
-  original Windows script: ports 0x62/0x66, `FAN_SET_CMD = 0x99`,
-  `EC_AUTO_DUTY = 0xCC`, `EC_RELEASE_CMD = 0x98`. Only the I/O mechanism
-  changed (`Inp32`/`Out32` instead of `/dev/port` reads/writes).
-- **Fan curve & control loop** (`ControlLoop.cs`) -- identical thresholds
-  to `FAN_CURVE` in the Python script.
-- **Temps** (`Sensors.cs`) -- LibreHardwareMonitorLib instead of sysfs;
-  picks the CPU "Package" sensor and a GPU "Core" sensor the same way the
-  Linux version picked `coretemp`'s package input and `nouveau`'s temp1.
+Run this in an elevated PowerShell (right-click -> Run as Administrator):
 
-## What needed a different approach
-
-- **No sudo/helper split.** Windows doesn't have a sudoers equivalent for
-  "this one script, this one flag, no password." The whole app just runs
-  elevated (UAC prompt via `app.manifest`'s `requireAdministrator`).
-- **CPU freq cap** (`CpuFreq.cs`) -- there's no `cpupower`-style kHz cap on
-  Windows. The closest analog is the `PROCTHROTTLEMAX` power setting (max
-  processor state, as a % of nominal max), set via `powercfg`. I left the
-  UI buttons as percentages instead of the kHz values your Python buttons
-  used -- map them to whatever feels right for your i7-6700HQ's turbo
-  range.
-- **Keyboard backlight** (`Keyboard.cs`) -- **now implemented**, not a stub
-  anymore. Turns out this board's backlight isn't an EC port write at all --
-  `tuxedo-drivers`' `clevo_leds.h`/`clevo_wmi.c` showed it's a standard ACPI
-  WMI control-method call (GUID `ABBC0F6D-8EA1-11D1-00A0-C90629100000`,
-  method `0x27` to set / `0x3D` to get brightness). Windows' own
-  `wmiacpi.sys` mapper reads the exact same firmware table and exposes a
-  WMI class for it under `root\WMI` -- so this uses plain `System.Management`,
-  no driver, no admin rights needed for this one piece.
-
-  The class/method *names* Windows generates are BIOS-specific and weren't
-  in the driver source, so `Keyboard.cs` finds them at runtime by matching
-  the `guid` qualifier rather than hardcoding a guess. Run
-  `discover-clevo-wmi.ps1` first (no admin needed) to see what your BIOS
-  actually calls things, and sanity-check it lines up with what
-  `Keyboard.cs` finds.
-
-  One thing I genuinely can't verify without the hardware: whether this
-  board's white backlight is the 3-step variant (off/half/full,
-  `CLEVO_KBD_BRIGHTNESS_WHITE_MAX = 0x02`) or the 6-step variant used on
-  some <=7th-gen boards (`..._MAX_5 = 0x05`). I assumed 6-step since your
-  i7-6700HQ is 6th gen, matching the existing 0-5 button row 1:1. If only
-  3 distinct brightness levels actually show up, halve/round the level
-  before calling `SetLevel`.
-
-## Build
-
-Requires .NET 8 SDK and Windows (this won't compile cross-platform since
-it's WinForms + COM-ish P/Invoke against a Windows-only DLL).
-
-```
-cd win/LzHwCtrl
-dotnet restore
-dotnet build -c Release -r win-x64
+```powershell
+irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
 ```
 
-Then put `inpoutx64.dll` next to `LzHwCtrl.exe` in the build output
-(`bin\Release\net8.0-windows\win-x64\`), or uncomment the `<None Include=...>`
-block in `LzHwCtrl.csproj` to have the build copy it automatically.
+The installer:
+1. Downloads the repo and builds the app with `dotnet publish`
+2. Installs to `C:\Program Files\LzHwCtrl`
+3. Installs and starts two kernel driver services:
+   - `inpoutx64` -- raw EC port I/O (fan control, CPU freq)
+   - `SvThANSP` -- Clevo WMI provider (keyboard backlight)
+4. Registers the Clevo WMI class definitions (`mofcomp clevo.bmf`)
+5. Registers a Task Scheduler task to autostart at logon (elevated)
 
-Same for LibreHardwareMonitorLib: either let the NuGet package reference
-in the `.csproj` pull it in automatically, or manually copy
-`LibreHardwareMonitorLib.dll` from `../LibreHardwareMonitor/` into the
-project folder if you'd rather use your already-downloaded copy than
-fetch from NuGet.
+## Uninstall
 
-## Run
+```powershell
+irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
+```
 
-Launch `LzHwCtrl.exe` -- it'll prompt for admin via UAC (required for the
-raw port I/O), then sit in the system tray. First launch loads/starts the
-inpoutx64 kernel driver; if `EcPort.EnsureDriverLoaded()` throws, confirm
-you accepted the UAC prompt and that `inpoutx64.dll` actually sits next
-to the exe.
+Stops and removes both driver services, removes the WMI class registrations,
+removes the scheduled task, and deletes the install directory. `LzHwCtrl.sys`
+(the inpoutx64 driver file) is locked by Windows until the next reboot, so
+if the install folder isn't fully removed immediately, it cleans up on reboot.
 
-## Caveats / things to verify on real hardware
+## What it controls
 
-- I don't have this laptop to test against, so the EC read/write timing
-  (`WaitReady`'s busy-loop) and the LibreHardwareMonitor sensor name
-  matching (`"Package"` / `"Core"`) should be checked against what
-  actually shows up in LibreHardwareMonitor's own GUI for your specific
-  i7-6700HQ + GTX 980M combo -- sensor label text can vary by
-  LibreHardwareMonitorLib version.
-- Closing to tray vs. fully exiting matters: only the tray "Exit" item
-  calls `ControlLoop.Stop()` (which resets fans to EC auto control), same
-  intent as your Python script's `reset_to_ec_control()` on shutdown.
-  Killing the process via Task Manager will skip that, same risk as on
-  Linux.
+### Fan speed
+
+Direct EC port I/O via `inpoutx64.dll` (ports `0x62`/`0x66`). A background
+control loop reads CPU and GPU temps from LibreHardwareMonitorLib and drives
+fan duty cycle against the same curve as the Linux version. Menu buttons set
+a fixed duty % or return to EC auto control.
+
+### Keyboard backlight
+
+Six buttons: Off, 1, 2, 3, 4, 5 (brightness levels).
+
+The P65/P67's white backlight is controlled by the `SetWhiteLedKB` WMI method
+on the `CLEVO_GET` class in `root\wmi`. This class is provided by `SvThANSP.sys`
+(a Clevo kernel driver from the original Control Center package) once its WMI
+class schema is compiled into the WMI repository via `mofcomp clevo.bmf`.
+
+The implementation (`Keyboard.cs`) uses `System.Management` to call
+`SetWhiteLedKB(Data: UInt16)` directly -- no IOCTL, no custom driver code.
+
+### CPU frequency cap
+
+Sets the Windows `PROCTHROTTLEMAX` power setting (max processor state as a %
+of nominal max) via `powercfg`. Buttons: Auto (100%), 60%, 70%, 80%, 90%.
+There is no direct kHz cap equivalent on Windows, so percentages are used
+instead of the kHz values the Linux version uses.
+
+## How the keyboard backlight dependency works
+
+Without `SvThANSP.sys` loaded and `clevo.bmf` compiled into WMI, the
+`CLEVO_GET` class does not exist and keyboard buttons silently do nothing.
+The install script handles both. If you want to verify manually:
+
+```powershell
+# Should return an object with InstanceName, not an error
+Get-WmiObject -Namespace "root\wmi" -Class "CLEVO_GET"
+
+# Should turn the backlight off
+$obj = Get-WmiObject -Namespace "root\wmi" -Class "CLEVO_GET"
+$p = $obj.GetMethodParameters("SetWhiteLedKB")
+$p["Data"] = [uint16]0
+$obj.InvokeMethod("SetWhiteLedKB", $p, $null)
+```
+
+## Files in win/
+
+| File | Purpose |
+|------|---------|
+| `*.cs` | C# source (WinForms app) |
+| `LzHwCtrl.csproj` | .NET 8 project file |
+| `app.manifest` | Requests UAC elevation at launch |
+| `inpoutx64.dll` | Usermode shim for the inpoutx64 kernel driver (EC port I/O) |
+| `SvThANSP.sys` | Clevo kernel driver -- provides CLEVO_GET WMI class |
+| `clevo.bmf` | Binary MOF extracted from Clevo installer -- defines CLEVO_GET schema |
+| `install.ps1` | One-command installer |
+| `uninstall.ps1` | One-command uninstaller |
+
+## Build manually
+
+Requires .NET 8 SDK and Windows x64.
+
+```powershell
+cd win
+dotnet publish -c Release -r win-x64 --self-contained false
+```
+
+Put `inpoutx64.dll` next to the published `LzHwCtrl.exe`, then install the
+two driver services and run `mofcomp clevo.bmf` as described in `install.ps1`.
+
+## Notes
+
+- The app must run elevated (UAC) for EC port I/O and driver management.
+  The scheduled task handles this at logon automatically.
+- Closing via tray -> Exit resets fans to EC auto control. Killing the process
+  via Task Manager skips that reset (same behaviour as the Linux version).
+- LibreHardwareMonitorLib sensor label text can vary by version. If temps read
+  as zero, check what labels appear in the LibreHardwareMonitor GUI for your
+  i7-6700HQ + GTX 980M and adjust the sensor name matching in `Sensors.cs`.
