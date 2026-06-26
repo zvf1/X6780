@@ -1,6 +1,6 @@
 # X6780
 
-Fan speed, CPU frequency, and keyboard backlight control for the Clevo P65/P67RGRERA (i7-6700HQ, GTX 980M).
+Fan speed, CPU frequency, and keyboard backlight control for the Clevo P65/P67RGRERA.
 
 ---
 
