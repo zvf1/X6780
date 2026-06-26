@@ -14,7 +14,7 @@ Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/upda
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosoptional.sh | bash
 ```
-**Linux Mint / Ubuntu-based**
+**Linux Mint**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh | bash
 ```
@@ -33,7 +33,7 @@ irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/uninstall.sh | bash
 ```
-**Linux Mint / Ubuntu-based**
+**Linux Mint**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/uninstall.sh | bash
 ```
