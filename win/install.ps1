@@ -53,6 +53,8 @@ $SvThANSPSrc   = "win\SvThANSP.sys"
 $SvThANSPSvc   = "SvThANSP"
 # SvThANSPDst is set after InstallDir is known (same value, defined here for clarity)
 $SvThANSPDst   = "$InstallDir\SvThANSP.sys"
+$ClevomofSrc   = "win\CLEVOMOF.dll"
+$ClevomofDst   = "$InstallDir\CLEVOMOF.dll"
 
 try {
 
@@ -235,6 +237,31 @@ if (Test-Path $svThANSPSrcPath) {
     Warn "SvThANSP.sys not found at $svThANSPSrcPath - keyboard backlight will be disabled."
 }
 
+# ---- 5c. Register CLEVOMOF.dll WMI class definitions ----
+# CLEVOMOF.dll is a resource-only DLL containing the compiled MOF (Binary MOF / BMF)
+# that defines the CLEVO_GET WMI class and all its methods (SetWhiteLedKB etc).
+# mofcomp.exe compiles it into the WMI repository. Without this step, CLEVO_GET
+# does not exist in root\wmi even if SvThANSP.sys is running.
+Info "Registering CLEVO_GET WMI classes (mofcomp CLEVOMOF.dll)..."
+$clevomofSrcPath = Join-Path $repoRoot.FullName $ClevomofSrc
+if (Test-Path $clevomofSrcPath) {
+    Copy-Item $clevomofSrcPath -Destination $ClevomofDst -Force
+    $mofcomp = "$env:SystemRoot\System32\wbem\mofcomp.exe"
+    if (Test-Path $mofcomp) {
+        $mofResult = & $mofcomp $ClevomofDst 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Ok "CLEVO_GET WMI classes registered successfully."
+        } else {
+            Warn "mofcomp returned exit code $LASTEXITCODE. WMI class registration may have failed."
+            Write-Host "  mofcomp output: $mofResult" -ForegroundColor DarkGray
+        }
+    } else {
+        Warn "mofcomp.exe not found at $mofcomp - WMI classes not registered."
+    }
+} else {
+    Warn "CLEVOMOF.dll not found at $clevomofSrcPath - keyboard backlight will be disabled."
+}
+
 # ---- 6. Scheduled Task autostart (Windows equivalent of the XDG autostart
 #         .desktop entry the Linux installers write) ----
 # Runs at logon, elevated (RunLevel Highest), as the installing user.
@@ -270,7 +297,7 @@ Write-Host ""
 Write-Host "  To launch manually:"
 Write-Host "    $ExePath"
 Write-Host ""
-Write-Host "  To uNinstall:"
+Write-Host "  To uninstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex"
 Write-Host ""
 
