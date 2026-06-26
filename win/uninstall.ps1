@@ -125,7 +125,7 @@ Write-Host "  Note: this removes the SvThANSP driver (keyboard backlight) and
 Write-Host "  since it's shared infrastructure other apps might also use."
 Write-Host "  If you want it gone too: sc.exe stop inpoutx64; sc.exe delete inpoutx64"
 Write-Host ""
-Write-Host "  To reinstall:"
+Write-Host "  To REinstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex"
 Write-Host ""
 
