@@ -22,7 +22,7 @@ Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/upda
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosoptional.sh | bash
 ```
-**Windows 10 x64**
+**Windows 10/11 x64**
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
 ```
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/uninstall.sh |
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/uninstall.sh | bash
 ```
 
-**Windows 10 x64**
+**Windows 10/11 x64**
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
 ```
