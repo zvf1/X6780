@@ -53,8 +53,8 @@ try {
 } catch {
     Warn "Could not remove CLEVO_GET from WMI (safe to ignore if already absent): $_"
 }
-$clevomofDst = "$InstallDir\CLEVOMOF.dll"
-if (Test-Path $clevomofDst) { Remove-Item $clevomofDst -Force }
+$clevoBmfDst = "$InstallDir\clevo.bmf"
+if (Test-Path $clevoBmfDst) { Remove-Item $clevoBmfDst -Force }
 
 Info "Stopping and removing SvThANSP driver service..."
 $svc = Get-Service -Name "SvThANSP" -ErrorAction SilentlyContinue
