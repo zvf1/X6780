@@ -53,8 +53,8 @@ $SvThANSPSrc   = "win\SvThANSP.sys"
 $SvThANSPSvc   = "SvThANSP"
 # SvThANSPDst is set after InstallDir is known (same value, defined here for clarity)
 $SvThANSPDst   = "$InstallDir\SvThANSP.sys"
-$ClevomofSrc   = "win\CLEVOMOF.dll"
-$ClevomofDst   = "$InstallDir\CLEVOMOF.dll"
+$ClevoBmfSrc   = "win\clevo.bmf"
+$ClevoBmfDst   = "$InstallDir\clevo.bmf"
 
 try {
 
@@ -242,24 +242,54 @@ if (Test-Path $svThANSPSrcPath) {
 # that defines the CLEVO_GET WMI class and all its methods (SetWhiteLedKB etc).
 # mofcomp.exe compiles it into the WMI repository. Without this step, CLEVO_GET
 # does not exist in root\wmi even if SvThANSP.sys is running.
-Info "Registering CLEVO_GET WMI classes (mofcomp CLEVOMOF.dll)..."
-$clevomofSrcPath = Join-Path $repoRoot.FullName $ClevomofSrc
-if (Test-Path $clevomofSrcPath) {
-    Copy-Item $clevomofSrcPath -Destination $ClevomofDst -Force
+Info "Registering CLEVO_GET WMI classes (mofcomp clevo.bmf)..."
+# clevo.bmf is the Binary MOF extracted from the Clevo installer's CLEVOMOF.dll resource.
+# mofcomp accepts .bmf files directly (they start with the BMOF magic header).
+$clevoBmfSrcPath = Join-Path $repoRoot.FullName $ClevoBmfSrc
+if (Test-Path $clevoBmfSrcPath) {
+    Copy-Item $clevoBmfSrcPath -Destination $ClevoBmfDst -Force
     $mofcomp = "$env:SystemRoot\System32\wbem\mofcomp.exe"
     if (Test-Path $mofcomp) {
-        $mofResult = & $mofcomp $ClevomofDst 2>&1
+        $mofResult = & $mofcomp $ClevoBmfDst 2>&1
         if ($LASTEXITCODE -eq 0) {
             Ok "CLEVO_GET WMI classes registered successfully."
         } else {
-            Warn "mofcomp returned exit code $LASTEXITCODE. WMI class registration may have failed."
+            Warn "mofcomp returned exit code $LASTEXITCODE. Trying text MOF fallback..."
             Write-Host "  mofcomp output: $mofResult" -ForegroundColor DarkGray
+            # BMF failed - this can happen if WMI repository format differs.
+            # Fall back to the reconstructed text MOF which defines the key methods.
+            $textMofPath = "$env:TEMP\clevo_get.mof"
+            $mofContent = @'
+#pragma namespace("\\.\root\wmi")
+[WMI, guid("{ABBC0F6D-8EA1-11d1-00A0-C90629100000}"), Description("Clevo WMI interface")]
+class CLEVO_GET {
+    [key, read] string InstanceName;
+    [read] boolean Active;
+    [WmiMethodId(1), Implemented] void GetWhiteLedKB([out] uint32 Data);
+    [WmiMethodId(2), Implemented] void SetWhiteLedKB([in] uint16 Data);
+    [WmiMethodId(3), Implemented] void GetCPUFANDuty([out] uint32 Data);
+    [WmiMethodId(4), Implemented] void SetFanDuty([in] uint32 Data);
+    [WmiMethodId(5), Implemented] void GetCPUtemp([out] uint32 Data);
+    [WmiMethodId(6), Implemented] void GetVGA1temp([out] uint32 Data);
+    [WmiMethodId(49), Implemented] void SetVolumeLED([in] uint16 Data);
+    [WmiMethodId(50), Implemented] void GetVolumeLED([out] uint32 Data);
+    [WmiMethodId(52), Implemented] void SetKBLED([in] uint32 Data);
+};
+'@
+            $mofContent | Out-File -FilePath $textMofPath -Encoding ascii
+            $mofResult2 = & $mofcomp $textMofPath 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Ok "CLEVO_GET WMI classes registered via text MOF fallback."
+            } else {
+                Warn "Text MOF fallback also failed (exit $LASTEXITCODE). Keyboard backlight buttons will not work."
+                Write-Host "  Output: $mofResult2" -ForegroundColor DarkGray
+            }
         }
     } else {
-        Warn "mofcomp.exe not found at $mofcomp - WMI classes not registered."
+        Warn "mofcomp.exe not found - WMI classes not registered."
     }
 } else {
-    Warn "CLEVOMOF.dll not found at $clevomofSrcPath - keyboard backlight will be disabled."
+    Warn "clevo.bmf not found at $clevoBmfSrcPath - keyboard backlight will be disabled."
 }
 
 # ---- 6. Scheduled Task autostart (Windows equivalent of the XDG autostart
