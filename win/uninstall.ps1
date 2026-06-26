@@ -43,6 +43,19 @@ if ($proc) {
 }
 
 # ---- 1b. Stop and remove SvThANSP.sys (Clevo WMI provider) ----
+Info "Removing CLEVO_GET WMI class registrations..."
+# Re-running mofcomp with -uninstall flag or removing directly is not straightforward;
+# the simplest approach is to delete the class from the WMI repository.
+try {
+    $repo = [wmiclass]"root\wmi:CLEVO_GET"
+    $repo.Delete()
+    Ok "CLEVO_GET removed from WMI repository."
+} catch {
+    Warn "Could not remove CLEVO_GET from WMI (safe to ignore if already absent): $_"
+}
+$clevomofDst = "$InstallDir\CLEVOMOF.dll"
+if (Test-Path $clevomofDst) { Remove-Item $clevomofDst -Force }
+
 Info "Stopping and removing SvThANSP driver service..."
 $svc = Get-Service -Name "SvThANSP" -ErrorAction SilentlyContinue
 if ($svc) {
