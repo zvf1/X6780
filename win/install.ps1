@@ -102,24 +102,30 @@ if (-not $dotnetOk) {
         Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $dotnetInstallScript -UseBasicParsing
 
         $dotnetInstallDir = "$env:ProgramFiles\dotnet"
+        # dotnet-install.ps1 exits non-zero even on success in some environments,
+        # so do not check $LASTEXITCODE here -- verify by probing dotnet itself.
         & $dotnetInstallScript -Channel 8.0 -InstallDir $dotnetInstallDir -NoPath
-        if ($LASTEXITCODE -ne 0) {
-            Die "dotnet-install.ps1 failed - see output above. Install the .NET 8 SDK manually from https://dotnet.microsoft.com/download then re-run this script."
-        }
 
-        # Make 'dotnet' usable for the rest of *this* session immediately...
+        # Add to this session's PATH immediately so dotnet is usable right now.
         if (($env:Path -split ';') -notcontains $dotnetInstallDir) {
             $env:Path = "$dotnetInstallDir;$env:Path"
         }
 
-        # ...and persist it to the machine PATH so new terminals see it too.
+        # Persist to machine PATH so new terminals find it too.
         $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
         if (($machinePath -split ';') -notcontains $dotnetInstallDir) {
             [Environment]::SetEnvironmentVariable('Path', "$machinePath;$dotnetInstallDir", 'Machine')
         }
 
-        $dotnetVer = (dotnet --version) 2>$null
-        if ($dotnetVer) { $dotnetOk = $true }
+        # Verify the install actually worked by running dotnet.
+        $dotnetVer = (& "$dotnetInstallDir\dotnet.exe" --version) 2>$null
+        if ($dotnetVer) {
+            $dotnetOk = $true
+            # Make sure subsequent dotnet calls in this script use the full path.
+            Set-Alias -Name dotnet -Value "$dotnetInstallDir\dotnet.exe" -Scope Script
+        } else {
+            Die "dotnet-install.ps1 ran but dotnet is still not usable. Install the .NET 8 SDK manually from https://dotnet.microsoft.com/download then re-run this script."
+        }
     }
 
     if (-not $dotnetOk) {
