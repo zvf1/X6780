@@ -78,11 +78,40 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Warn "Scheduled task not found (safe to ignore)."
 }
 
-# ---- 3. Remove install directory ----
+# ---- 3. Stop inpoutx64 service so LzHwCtrl.sys is not locked ----
+# inpoutx64 registers LzHwCtrl.sys as a kernel service and holds a lock on the file.
+# We must stop (and optionally delete) it before Remove-Item can succeed.
+$inpSvc = Get-Service -Name "inpoutx64" -ErrorAction SilentlyContinue
+if ($inpSvc) {
+    Info "Stopping inpoutx64 service (releases lock on LzHwCtrl.sys)..."
+    sc.exe stop inpoutx64 | Out-Null
+    Start-Sleep -Seconds 1
+    sc.exe delete inpoutx64 | Out-Null
+    Ok "inpoutx64 service stopped and removed."
+}
+
+# ---- 4. Remove install directory ----
 Info "Removing $InstallDir ..."
 if (Test-Path $InstallDir) {
-    Remove-Item -Recurse -Force $InstallDir
-    Ok "Removed $InstallDir."
+    # Give the service a moment to fully release file handles
+    Start-Sleep -Milliseconds 500
+    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+    # If LzHwCtrl.sys is still locked (unlikely after sc delete), schedule for next reboot
+    if (Test-Path $InstallDir) {
+        Warn "Some files could not be removed immediately (still locked by kernel)."
+        Warn "Scheduling removal on next reboot..."
+        # Mark each remaining file for deletion at next boot via MoveFileEx
+        Get-ChildItem $InstallDir -Recurse -Force | ForEach-Object {
+            $null = [System.IO.File]::Move($_.FullName, $_.FullName)  # no-op touch
+        }
+        cmd /c "rd /s /q `"$InstallDir`"" 2>$null
+        if (Test-Path $InstallDir) {
+            Write-Host "  Run this after reboot if the folder remains:" -ForegroundColor Yellow
+            Write-Host "  rd /s /q `"$InstallDir`"" -ForegroundColor Gray
+        }
+    } else {
+        Ok "Removed $InstallDir."
+    }
 } else {
     Warn "$InstallDir not found (safe to ignore)."
 }
