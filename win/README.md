@@ -110,4 +110,4 @@ two driver services and run `mofcomp clevo.bmf` as described in `install.ps1`.
   via Task Manager skips that reset (same behaviour as the Linux version).
 - LibreHardwareMonitorLib sensor label text can vary by version. If temps read
   as zero, check what labels appear in the LibreHardwareMonitor GUI for your
-  i7-6700HQ + GTX 980M and adjust the sensor name matching in `Sensors.cs`.
+  device and adjust the sensor name matching in `Sensors.cs`.
