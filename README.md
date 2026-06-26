@@ -6,14 +6,6 @@ Fan speed, CPU frequency, and keyboard backlight control for the Clevo P65/P67RG
 
 ## Install
 
-**Linux Mint / Ubuntu-based**
-```bash
-curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh | bash
-```
-Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/updater)
-```bash
-curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintoptional.sh | bash
-```
 **Arch / EndeavourOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
@@ -22,6 +14,14 @@ Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/upda
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosoptional.sh | bash
 ```
+**Linux Mint / Ubuntu-based**
+```bash
+curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintinstall.sh | bash
+```
+Optional: (intel-undervolt with preset -155 cpu/cache + libmsquic installer/updater)
+```bash
+curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/mintoptional.sh | bash
+```
 **Windows 10/11 x64**
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
@@ -29,16 +29,14 @@ irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex
 
 ## Uninstall
 
-**Linux Mint / Ubuntu-based**
-```bash
-curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/uninstall.sh | bash
-```
-
 **Arch / EndeavourOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/uninstall.sh | bash
 ```
-
+**Linux Mint / Ubuntu-based**
+```bash
+curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/mint/uninstall.sh | bash
+```
 **Windows 10/11 x64**
 ```powershell
 irm https://raw.githubusercontent.com/zvf1/X6780/main/win/uninstall.ps1 | iex
