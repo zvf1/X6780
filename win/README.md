@@ -63,7 +63,7 @@ instead of the kHz values the Linux version uses.
 ## How the keyboard backlight dependency works
 
 Without `SvThANSP.sys` loaded and `clevo.bmf` compiled into WMI, the
-`CLEVO_GET` class does not exist and keyboard buttons silently do nothing.
+`CLEVO_GET` class does not exist, which means backlight won't work.
 The install script handles both. If you want to verify manually:
 
 ```powershell
