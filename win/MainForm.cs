@@ -102,6 +102,11 @@ namespace LzHwCtrl
             };
             _tray.DoubleClick += (_, __) => ShowFromTray();
 
+            // Start minimised to tray -- don't pop up the window on launch or reboot.
+            ShowInTaskbar = false;
+            WindowState   = FormWindowState.Minimized;
+            Load += (_, __) => Hide();
+
             FormClosing += (_, e) =>
             {
                 if (e.CloseReason == CloseReason.UserClosing && !_exiting)
