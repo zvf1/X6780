@@ -100,47 +100,56 @@ if ($inpSvc) {
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public class MoveFileEx {
+public class BootDeleter {
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    public static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, uint dwFlags);
-    public const uint DELAY_UNTIL_REBOOT = 4;
+    public static extern bool MoveFileExW(string src, string dst, uint flags);
+    public static bool ScheduleDelete(string path) {
+        // flags=4 = MOVEFILE_DELAY_UNTIL_REBOOT; dst=null means delete
+        return MoveFileExW(path, null, 4);
+    }
+    public static int LastError() {
+        return System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+    }
 }
 "@
 
-function Remove-OrSchedule {
-    param([string]$Path)
-    Remove-Item -Force $Path -ErrorAction SilentlyContinue
-    if (Test-Path $Path) {
-        # Still locked -- schedule for deletion at next boot
-        $ok = [MoveFileEx]::MoveFileExW($Path, $null, [MoveFileEx]::DELAY_UNTIL_REBOOT)
+function Remove-OrSchedule([string]$Path) {
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Path) {
+        # File still locked -- use MoveFileEx to delete it at next boot startup,
+        # before any services load. Pass the path as a verbatim \?\ extended path
+        # to avoid any backslash interpretation issues (error 3 = path not found).
+        $extPath = "\\?\" + $Path.TrimStart("\")
+        $ok = [BootDeleter]::ScheduleDelete($extPath)
         if ($ok) {
-            Write-Host "  Scheduled for removal at next boot: $Path" -ForegroundColor DarkGray
+            Write-Host "  Will be removed at next boot: $Path" -ForegroundColor DarkGray
         } else {
-            Warn "Could not schedule deletion of $Path (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
+            $err = [BootDeleter]::LastError()
+            Warn "Could not schedule deletion of $(Split-Path $Path -Leaf) (Win32 error $err)"
         }
     }
 }
 
 Info "Removing $InstallDir ..."
-if (Test-Path $InstallDir) {
+if (Test-Path -LiteralPath $InstallDir) {
     Start-Sleep -Milliseconds 500
 
-    # Delete files first, deepest first, so directories empty before we remove them
-    Get-ChildItem $InstallDir -Recurse -Force |
+    # Files first, longest path first (deepest), so parent dirs empty before we touch them
+    Get-ChildItem -LiteralPath $InstallDir -Recurse -Force |
         Sort-Object { $_.FullName.Length } -Descending |
         Where-Object { -not $_.PSIsContainer } |
         ForEach-Object { Remove-OrSchedule $_.FullName }
 
-    # Now remove directories (will succeed once files are gone or scheduled)
-    Get-ChildItem $InstallDir -Recurse -Force |
+    # Directories (also deepest first)
+    Get-ChildItem -LiteralPath $InstallDir -Recurse -Force |
         Sort-Object { $_.FullName.Length } -Descending |
         Where-Object { $_.PSIsContainer } |
-        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
-    Remove-Item -Force $InstallDir -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $InstallDir -Force -Recurse -ErrorAction SilentlyContinue
 
-    if (Test-Path $InstallDir) {
-        Ok "Removed $InstallDir (some locked files scheduled for deletion at next reboot)."
+    if (Test-Path -LiteralPath $InstallDir) {
+        Ok "Removed $InstallDir (one locked file queued for deletion at next reboot -- folder will be gone after restart)."
     } else {
         Ok "Removed $InstallDir."
     }
@@ -152,10 +161,7 @@ if (Test-Path $InstallDir) {
 Write-Host ""
 Write-Host "Uninstall complete." -ForegroundColor Green
 Write-Host ""
-Write-Host "  Note: this removes the SvThANSP driver (keyboard backlight) and
-  does not unload the inpoutx64 kernel driver service,"
-Write-Host "  since it's shared infrastructure other apps might also use."
-Write-Host "  If you want it gone too: sc.exe stop inpoutx64; sc.exe delete inpoutx64"
+Write-Host "  Note: this removes both the SvThANSP (keyboard backlight) and inpoutx64 (EC port I/O) driver services."
 Write-Host ""
 Write-Host "  To reinstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex"
