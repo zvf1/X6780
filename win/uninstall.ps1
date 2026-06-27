@@ -149,7 +149,11 @@ if (Test-Path -LiteralPath $InstallDir) {
     Remove-Item -LiteralPath $InstallDir -Force -Recurse -ErrorAction SilentlyContinue
 
     if (Test-Path -LiteralPath $InstallDir) {
-        Ok "Removed $InstallDir (one locked file queued for deletion at next reboot -- folder will be gone after restart)."
+        # Directory still exists (contains the locked file). Schedule the directory
+        # itself for deletion at boot too -- Windows removes it once it is empty.
+        $extDir = "\\?\" + $InstallDir.TrimStart("\")
+        $null = [BootDeleter]::ScheduleDelete($extDir)
+        Ok "Removed $InstallDir (locked file and folder queued for deletion at next reboot)."
     } else {
         Ok "Removed $InstallDir."
     }
