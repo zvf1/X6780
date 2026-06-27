@@ -91,24 +91,56 @@ if ($inpSvc) {
 }
 
 # ---- 4. Remove install directory ----
+# LzHwCtrl.sys may still be locked by the kernel even after sc delete --
+# Windows holds the file handle until the next SCM cycle. We use MoveFileEx
+# with MOVEFILE_DELAY_UNTIL_REBOOT (flag 4) to schedule any locked files for
+# deletion at the very start of the next boot, before services load.
+# This is the same mechanism Windows Installer uses for locked-file cleanup.
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class MoveFileEx {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, uint dwFlags);
+    public const uint DELAY_UNTIL_REBOOT = 4;
+}
+"@
+
+function Remove-OrSchedule {
+    param([string]$Path)
+    Remove-Item -Force $Path -ErrorAction SilentlyContinue
+    if (Test-Path $Path) {
+        # Still locked -- schedule for deletion at next boot
+        $ok = [MoveFileEx]::MoveFileExW($Path, $null, [MoveFileEx]::DELAY_UNTIL_REBOOT)
+        if ($ok) {
+            Write-Host "  Scheduled for removal at next boot: $Path" -ForegroundColor DarkGray
+        } else {
+            Warn "Could not schedule deletion of $Path (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
+        }
+    }
+}
+
 Info "Removing $InstallDir ..."
 if (Test-Path $InstallDir) {
-    # Give the service a moment to fully release file handles
     Start-Sleep -Milliseconds 500
-    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
-    # If LzHwCtrl.sys is still locked (unlikely after sc delete), schedule for next reboot
+
+    # Delete files first, deepest first, so directories empty before we remove them
+    Get-ChildItem $InstallDir -Recurse -Force |
+        Sort-Object { $_.FullName.Length } -Descending |
+        Where-Object { -not $_.PSIsContainer } |
+        ForEach-Object { Remove-OrSchedule $_.FullName }
+
+    # Now remove directories (will succeed once files are gone or scheduled)
+    Get-ChildItem $InstallDir -Recurse -Force |
+        Sort-Object { $_.FullName.Length } -Descending |
+        Where-Object { $_.PSIsContainer } |
+        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+
+    Remove-Item -Force $InstallDir -ErrorAction SilentlyContinue
+
     if (Test-Path $InstallDir) {
-        Warn "Some files could not be removed immediately (still locked by kernel)."
-        Warn "Scheduling removal on next reboot..."
-        # Mark each remaining file for deletion at next boot via MoveFileEx
-        Get-ChildItem $InstallDir -Recurse -Force | ForEach-Object {
-            $null = [System.IO.File]::Move($_.FullName, $_.FullName)  # no-op touch
-        }
-        cmd /c "rd /s /q `"$InstallDir`"" 2>$null
-        if (Test-Path $InstallDir) {
-            Write-Host "  Run this after reboot if the folder remains:" -ForegroundColor Yellow
-            Write-Host "  rd /s /q `"$InstallDir`"" -ForegroundColor Gray
-        }
+        Ok "Removed $InstallDir (some locked files scheduled for deletion at next reboot)."
     } else {
         Ok "Removed $InstallDir."
     }
@@ -125,7 +157,7 @@ Write-Host "  Note: this removes the SvThANSP driver (keyboard backlight) and
 Write-Host "  since it's shared infrastructure other apps might also use."
 Write-Host "  If you want it gone too: sc.exe stop inpoutx64; sc.exe delete inpoutx64"
 Write-Host ""
-Write-Host "  To REinstall:"
+Write-Host "  To reinstall:"
 Write-Host "    irm https://raw.githubusercontent.com/zvf1/X6780/main/win/install.ps1 | iex"
 Write-Host ""
 
