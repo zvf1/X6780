@@ -5,15 +5,15 @@ namespace LzHwCtrl
 {
     internal sealed class ControlLoop
     {
-        // Same curve as FAN_CURVE in lzhwctrl.py.
+        // Fan curve: (temp C, duty byte). Same values as FAN_CURVE in lzhwctrl.py.
         private static readonly (int temp, byte duty)[] FanCurve =
         {
-            (0,  0x60),
-            (40, 0x80),
-            (50, 0x90),
-            (65, 0xB0),
-            (72, 0xD0),
-            (77, 0xFF),
+            (0,  0x60),   // 38%
+            (30, 0x80),   // 50%
+            (40, 0x90),   // 56%
+            (65, 0xB0),   // 69%
+            (72, 0xD0),   // 82%
+            (77, 0xFF),   // 100%
         };
 
         public const int PollIntervalMs = 3000;
