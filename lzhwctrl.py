@@ -96,8 +96,8 @@ CPU_FREQ_BUTTONS = [
 # identical on Linux.
 FAN_CURVE = [
     (0,  0x60),
-    (40, 0x80),
-    (50, 0x90),
+    (30, 0x80),
+    (40, 0x90),
     (65, 0xB0),
     (72, 0xD0),
     (77, 0xFF),
