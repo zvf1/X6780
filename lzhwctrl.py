@@ -114,9 +114,10 @@ FAN_BUTTONS = [
 ]
 
 POLL_INTERVAL  = 3    # seconds between temp reads and fan curve updates
-HEARTBEAT_SECS = 2    # re-assert fan duty this often even if unchanged;
-                      # prevents the EC firmware from reclaiming control
-                      # between polls (the revving sound at ~50-55 C).
+HEARTBEAT_SECS = 2    # re-assert fan duty this often even if unchanged
+HYST_DOWN      = 4    # degrees C a temp must DROP below a threshold before
+                      # the fan steps back down. Prevents hunting (rev sound)
+                      # when temp hovers near a curve knee.
 
 # EC protocol constants (same as the Windows script)
 EC_DATA_PORT = 0x62
@@ -350,11 +351,45 @@ def set_cpu_freq(khz):
 
 
 def get_duty_for_temp(temp):
+    """Return the fan duty for the given temperature (no hysteresis).
+    Use duty_for_temp_hyst() in the control loop instead."""
     duty = FAN_CURVE[0][1]
     for threshold, fan_duty in FAN_CURVE:
         if temp >= threshold:
             duty = fan_duty
     return duty
+
+
+def duty_for_temp_hyst(temp, current_duty):
+    """Fan curve lookup with downward hysteresis.
+
+    Steps UP immediately when temp crosses a threshold.
+    Steps DOWN only when temp has fallen HYST_DOWN degrees below the
+    threshold, so brief CPU bursts don't cause audible hunting.
+    """
+    # Find what duty a naive lookup would give
+    target_duty = get_duty_for_temp(temp)
+
+    if target_duty >= current_duty:
+        # Always step up immediately
+        return target_duty
+
+    # Stepping down: only do so if temp is well below the threshold
+    # that would push us back up to current_duty.
+    # Find the lowest threshold that maps to current_duty.
+    trigger_threshold = None
+    for threshold, fan_duty in FAN_CURVE:
+        if fan_duty == current_duty:
+            trigger_threshold = threshold
+            break
+
+    if trigger_threshold is None:
+        return target_duty  # current_duty not in curve, just follow it
+
+    if temp <= trigger_threshold - HYST_DOWN:
+        return target_duty  # far enough below -- allow step down
+    else:
+        return current_duty  # still too close -- hold current duty
 
 
 # ---- SENSOR DISCOVERY (hwmon numbering can shift across boots, so we
@@ -719,12 +754,12 @@ def control_loop():
         if c_override is not None:
             cpu_duty = c_override
         else:
-            cpu_duty = get_duty_for_temp(cpu_temp) if cpu_temp else FAN_CURVE[0][1]
+            cpu_duty = duty_for_temp_hyst(cpu_temp, last_cpu_duty or FAN_CURVE[0][1])                 if cpu_temp else FAN_CURVE[0][1]
 
         if g_override is not None:
             gpu_duty = g_override
         else:
-            gpu_duty = get_duty_for_temp(gpu_temp) if gpu_temp else FAN_CURVE[0][1]
+            gpu_duty = duty_for_temp_hyst(gpu_temp, last_gpu_duty or FAN_CURVE[0][1])                 if gpu_temp else FAN_CURVE[0][1]
 
         state["cpu_temp"] = cpu_temp or 0.0
         state["gpu_temp"] = gpu_temp or 0.0
