@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clevo/EC fan + keyboard backlight control — Linux port.
+Clevo/EC fan + keyboard backlight control -- Linux port.
 
 ARCHITECTURE
 ------------
@@ -26,7 +26,7 @@ ONE-TIME SETUP
 --------------
 1. Make sure TCC's daemon is not fighting you for the EC:
        sudo systemctl disable --now tccd
-   (You can leave the `tuxedo-drivers` kernel modules installed —
+   (You can leave the `tuxedo-drivers` kernel modules installed --
    tuxedo_keyboard is what gives you the /sys/class/leds keyboard
    backlight device used below, and it's just a passive driver, not
    a daemon. Uninstall `tuxedo-control-center` itself if you want it
@@ -73,7 +73,7 @@ except Exception:
 script_dir = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(script_dir, "lzhwctrl.ico")
 
-# Persistent state file — saves fan/kb/freq selections across reboots.
+# Persistent state file -- saves fan/kb/freq selections across reboots.
 STATE_FILE = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
     "lzhwctrl", "state.json"
@@ -92,7 +92,7 @@ CPU_FREQ_BUTTONS = [
 ]
 
 # Temperature (C) -> fan duty (0x00-0xFF). Carried over from the
-# Windows version, unchanged — the EC protocol and duty scale are
+# Windows version, unchanged -- the EC protocol and duty scale are
 # identical on Linux.
 FAN_CURVE = [
     (0,  0x60),
@@ -113,7 +113,10 @@ FAN_BUTTONS = [
     ("100%", 0xFF),
 ]
 
-POLL_INTERVAL = 3
+POLL_INTERVAL  = 3    # seconds between temp reads and fan curve updates
+HEARTBEAT_SECS = 2    # re-assert fan duty this often even if unchanged;
+                      # prevents the EC firmware from reclaiming control
+                      # between polls (the revving sound at ~50-55 C).
 
 # EC protocol constants (same as the Windows script)
 EC_DATA_PORT = 0x62
@@ -280,7 +283,7 @@ def ec_helper_main(argv):
         # argv[1] is max frequency in kHz, or "auto" to remove the cap.
         arg = argv[1].lower()
         if arg == "auto":
-            # Remove the upper limit — restore to hardware maximum.
+            # Remove the upper limit -- restore to hardware maximum.
             result = subprocess.run(
                 ["cpupower", "frequency-set", "-u", "0"],
                 capture_output=True
@@ -699,8 +702,9 @@ stop_event = threading.Event()
 
 def control_loop():
     global cpu_override, gpu_override
-    last_cpu_duty = None
-    last_gpu_duty = None
+    last_cpu_duty  = None
+    last_gpu_duty  = None
+    last_heartbeat = 0.0   # monotonic time of last forced re-assertion
 
     while not stop_event.is_set():
         cpu_temp, gpu_temp = get_temps()
@@ -729,13 +733,25 @@ def control_loop():
         state["cpu_pct"]  = round(cpu_duty / 255 * 100)
         state["gpu_pct"]  = round(gpu_duty / 255 * 100)
 
-        if cpu_duty != last_cpu_duty:
+        now = time.monotonic()
+        heartbeat_due = (now - last_heartbeat) >= HEARTBEAT_SECS
+
+        # Always write on duty change; also re-assert on heartbeat to
+        # stop the EC firmware reclaiming control between poll cycles.
+        # This is what causes the revving sound at ~50-55 C: the EC's
+        # own curve runs every ~1-2 s and overwrites our duty bytes
+        # until we write them back. Sending the 0x99 command again is
+        # enough to re-lock software control.
+        if cpu_duty != last_cpu_duty or heartbeat_due:
             set_cpu_fan(cpu_duty)
             last_cpu_duty = cpu_duty
 
-        if gpu_duty != last_gpu_duty:
+        if gpu_duty != last_gpu_duty or heartbeat_due:
             set_gpu_fans(gpu_duty)
             last_gpu_duty = gpu_duty
+
+        if heartbeat_due:
+            last_heartbeat = now
 
         time.sleep(POLL_INTERVAL)
 
