@@ -113,7 +113,7 @@ FAN_BUTTONS = [
     ("100%", 0xFF),
 ]
 
-DEBUG_LOG = None  # Set to a path like "/tmp/lzhwctrl_debug.log" to enable
+DEBUG_LOG = "/tmp/lzhwctrl_debug.log"
 POLL_INTERVAL  = 3    # seconds between temp reads and fan curve updates
 HEARTBEAT_SECS = 2    # re-assert fan duty this often even if unchanged
 HYST_DOWN      = 4    # degrees C a temp must DROP below a threshold before
