@@ -113,7 +113,7 @@ FAN_BUTTONS = [
     ("100%", 0xFF),
 ]
 
-DEBUG_LOG = "/tmp/lzhwctrl_debug.log"
+DEBUG_LOG = None  # Set to a path like "/tmp/lzhwctrl_debug.log" to enable
 POLL_INTERVAL  = 3    # seconds between temp reads and fan curve updates
 HEARTBEAT_SECS = 2    # re-assert fan duty this often even if unchanged
 HYST_DOWN      = 4    # degrees C a temp must DROP below a threshold before
@@ -802,6 +802,22 @@ def control_loop():
 
 def main():
     global cpu_override, gpu_override, cpu_freq_override
+
+    # ---- Signal handlers so EC is reset on SIGTERM (system reboot/shutdown) ----
+    def _shutdown_handler(signum, frame):
+        # Called when systemd/init sends SIGTERM during reboot or shutdown.
+        # Must reset the EC before exiting or the fan control state persists
+        # across warm reboots, causing the EC firmware conflict (revving sound).
+        stop_event.set()
+        try:
+            reset_to_ec_control()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    import signal as _signal
+    _signal.signal(_signal.SIGTERM, _shutdown_handler)
+    _signal.signal(_signal.SIGHUP,  _shutdown_handler)
 
     # ---- Restore saved preferences ----
     prefs = load_prefs()
