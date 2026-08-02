@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — Clevo fan/keyboard control for X6780 (Arch/EndeavourOS)
+# install.sh -- Clevo fan/keyboard control for X6780 (Arch/EndeavourOS)
 # Usage: curl -fsSL https://raw.githubusercontent.com/zvf1/X6780/main/arch/eosinstall.sh | bash
 set -euo pipefail
 
@@ -37,7 +37,7 @@ command -v sudo  >/dev/null 2>&1 || die "sudo is required but not installed."
 command -v pacman >/dev/null 2>&1 || die "This installer is for Arch-based systems (pacman required)."
 
 echo ""
-echo "  Clevo X6780 fan/keyboard control — installer"
+echo "  Clevo X6780 fan/keyboard control -- installer"
 echo "  Fan control script : $INSTALL_DIR"
 echo "  Tuxedo drivers src : $DRIVERS_SRC"
 echo "  User               : $REAL_USER"
@@ -72,13 +72,13 @@ fi
 # ---- 3. Clone and build tuxedo-drivers ----
 info "Cloning tuxedo-drivers from $DRIVERS_REPO ..."
 if [[ -d "$DRIVERS_SRC/.git" ]]; then
-    warn "$DRIVERS_SRC already exists — pulling latest..."
+    warn "$DRIVERS_SRC already exists -- pulling latest..."
     sudo git -C "$DRIVERS_SRC" pull --ff-only
 else
     sudo git clone --depth=1 "$DRIVERS_REPO" "$DRIVERS_SRC"
 fi
 
-info "Preparing kernel headers (generates autoconf.h — needed on Arch)..."
+info "Preparing kernel headers (generates autoconf.h -- needed on Arch)..."
 # Arch linux-headers does not ship a pre-generated autoconf.h, and `make prepare`
 # fails because the headers package omits arch-specific Kconfig files referenced
 # by crypto/Kconfig (arm, arm64, sparc, etc.). We work around this by:
@@ -95,7 +95,7 @@ if [[ ! -f "$KBUILD/include/generated/autoconf.h" ]] || [[ ! -s "$KBUILD/include
     info "Seeding autoconf.h and auto.conf from .config..."
     sudo mkdir -p "$KBUILD/include/generated" "$KBUILD/include/config"
 
-    # Build autoconf.h from .config — convert CONFIG_FOO=y/m → #define CONFIG_FOO 1
+    # Build autoconf.h from .config -- convert CONFIG_FOO=y/m → #define CONFIG_FOO 1
     # and CONFIG_FOO=<val> → #define CONFIG_FOO <val>; skip CONFIG_CC_VERSION_TEXT
     # (its embedded quotes break make's shell comparisons).
     sudo bash -c '
@@ -142,7 +142,7 @@ ok "tuxedo-drivers built and installed."
 for mod in tuxedo_keyboard clevo_wmi; do
     if ! lsmod | grep -q "^$mod"; then
         info "Loading $mod module..."
-        sudo modprobe "$mod" || warn "modprobe $mod failed — may need a reboot."
+        sudo modprobe "$mod" || warn "modprobe $mod failed -- may need a reboot."
     fi
 done
 
@@ -150,7 +150,7 @@ done
 if [[ -d /sys/class/leds/white:kbd_backlight ]]; then
     ok "Keyboard backlight device is present (/sys/class/leds/white:kbd_backlight)"
 else
-    warn "Keyboard backlight device not yet visible — a reboot may be needed."
+    warn "Keyboard backlight device not yet visible -- a reboot may be needed."
 fi
 
 # ---- 5. Pacman hook: auto-rebuild on kernel upgrade ----
@@ -211,7 +211,7 @@ When = PostTransaction
 Exec = /usr/local/bin/tuxedo-drivers-rebuild
 EOF
 
-ok "Pacman hook installed — tuxedo-drivers will rebuild automatically after kernel upgrades."
+ok "Pacman hook installed -- tuxedo-drivers will rebuild automatically after kernel upgrades."
 
 # ---- 6. Disable TCC daemon ----
 info "Stopping and disabling tccd (TCC daemon) ..."
@@ -222,7 +222,52 @@ elif systemctl list-unit-files tccd.service &>/dev/null 2>&1; then
     sudo systemctl disable tccd 2>/dev/null || true
     ok "tccd was not running but has been disabled."
 else
-    warn "tccd service not found — nothing to disable (safe to ignore)."
+    warn "tccd service not found -- nothing to disable (safe to ignore)."
+fi
+
+# ---- 6b. Disable ACPI active fan cooling ----
+# The kernel ACPI thermal framework independently activates fan cooling devices
+# when CPU temps cross DSDT-defined trip points (typically ~45-55 C on the P65/P67).
+# This causes brief 100% fan bursts that fight with lzhwctrl.py, producing an
+# audible rev-up/rev-down cycle. Disabling ACPI active cooling hands full fan
+# authority to lzhwctrl.py.
+#
+# We do this two ways:
+#   1. Kernel parameter thermal.act=-1 (persistent across reboots)
+#   2. Runtime sysfs disable (takes effect immediately without a reboot)
+
+CMDLINE_FILE="/etc/kernel/cmdline"
+PARAM="thermal.act=-1"
+
+info "Disabling ACPI active fan cooling (thermal.act=-1)..."
+
+# Persist via /etc/kernel/cmdline (used by mkinitcpio/booster/dracut on Arch)
+if [[ -f "$CMDLINE_FILE" ]]; then
+    if ! grep -q "$PARAM" "$CMDLINE_FILE"; then
+        sudo sed -i "s/$/ $PARAM/" "$CMDLINE_FILE"
+        ok "Added $PARAM to $CMDLINE_FILE"
+    else
+        ok "$PARAM already in $CMDLINE_FILE"
+    fi
+else
+    warn "$CMDLINE_FILE not found -- you may need to add $PARAM to your bootloader manually."
+    warn "For systemd-boot: add it to /boot/loader/entries/*.conf on the 'options' line."
+    warn "For GRUB: add it to GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub and run grub-mkconfig."
+fi
+
+# Also disable at runtime right now (no reboot needed for current session)
+_disabled=0
+for d in /sys/class/thermal/cooling_device*; do
+    _type=$(cat "$d/type" 2>/dev/null || true)
+    if [[ "$_type" == "Fan" ]]; then
+        echo 0 | sudo tee "$d/cur_state" > /dev/null 2>&1 && ((_disabled++)) || true
+    fi
+done
+if [[ $_disabled -gt 0 ]]; then
+    ok "Disabled $_disabled ACPI Fan cooling device(s) for current session."
+else
+    warn "No ACPI Fan cooling devices found in sysfs (may already be inactive or named differently)."
+    warn "The kernel parameter will take effect after the next reboot regardless."
 fi
 
 # ---- 7. Deploy fan control script ----
@@ -238,6 +283,43 @@ sudo curl -fsSL "$REPO_RAW/lzhwctrl.ico" -o "$INSTALL_DIR/lzhwctrl.ico"
 
 ok "Fan control script installed to $INSTALL_DIR"
 
+# ---- 7b. Install EC reset shutdown service ----
+# Ensures the EC fan control is reset to auto on every reboot/shutdown,
+# even if the GUI process is already dead. Without this, warm reboots
+# inherit the EC software fan control state, causing the fan revving issue.
+SHUTDOWN_SVC="clevo-ec-reset.service"
+SHUTDOWN_SVC_SRC="$(dirname "$0")/$SHUTDOWN_SVC"
+SHUTDOWN_SVC_DST="/etc/systemd/system/$SHUTDOWN_SVC"
+
+info "Installing EC reset shutdown service..."
+if [[ -f "$SHUTDOWN_SVC_SRC" ]]; then
+    sudo cp "$SHUTDOWN_SVC_SRC" "$SHUTDOWN_SVC_DST"
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SHUTDOWN_SVC"
+    ok "EC reset shutdown service installed and enabled."
+else
+    # Inline the service file if not found next to the install script
+    sudo tee "$SHUTDOWN_SVC_DST" > /dev/null << 'SVCEOF'
+[Unit]
+Description=Reset Clevo EC fan control to auto on shutdown/reboot
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+RequiresMountsFor=/opt/clevo-fancontrol
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStop=/opt/clevo-fancontrol/lzhwctrl.py --ec-helper reset
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SHUTDOWN_SVC"
+    ok "EC reset shutdown service installed (inline) and enabled."
+fi
+
 # ---- 8. Sudoers rule ----
 info "Writing sudoers rule (scoped to $SCRIPT --ec-helper only) ..."
 SUDOERS_CONTENT="$REAL_USER ALL=(root) NOPASSWD: $SCRIPT --ec-helper *"
@@ -249,7 +331,7 @@ if sudo visudo -c -f "$SUDOERS_TMP" &>/dev/null; then
     ok "Sudoers rule written to $SUDOERS_FILE"
 else
     rm -f "$SUDOERS_TMP"
-    die "visudo syntax check failed — sudoers rule was NOT written."
+    die "visudo syntax check failed -- sudoers rule was NOT written."
 fi
 rm -f "$SUDOERS_TMP"
 
@@ -274,7 +356,7 @@ HELPER_OUT=$(sudo -n "$SCRIPT" --ec-helper 2>&1 || true)
 if [[ -f "$SCRIPT" ]] && echo "$HELPER_OUT" | grep -q "ec-helper"; then
     ok "Privileged helper is reachable via sudo."
 else
-    warn "Could not confirm helper path — check the sudoers rule manually:"
+    warn "Could not confirm helper path -- check the sudoers rule manually:"
     warn "  sudo -n $SCRIPT --ec-helper"
 fi
 
