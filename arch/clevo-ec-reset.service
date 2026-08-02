@@ -1,0 +1,14 @@
+[Unit]
+Description=Reset Clevo EC fan control to auto on shutdown/reboot
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+RequiresMountsFor=/opt/clevo-fancontrol
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStop=/opt/clevo-fancontrol/lzhwctrl.py --ec-helper reset
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
